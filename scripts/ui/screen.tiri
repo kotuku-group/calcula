@@ -1,0 +1,105 @@
+-- $TIRI
+--[[
+The LCD.  The screen is a clipped viewport placed on the active display area with its own 384 x 264 view box, so all
+screen content is drawn in calculator pixels.  The grid is taken from layout.data.lcd: it is 48 rows taller than the
+fx-CG100's 384 x 216 so that the display fills more of the glass, with the same square pixel pitch.  The screen
+subtree is rebuilt only when the fixture changes; small updates write to referenced vectors.
+
+Milestone 0 fixtures:
+   off      Blank: the display is dark.  Used by the shell goldens.
+   pattern  Calibration pattern: pixel border, 16 px grid, centre cross, colour bars and a 1 px checkerboard.
+   keytest  Status bar and a live report of the last committed key, used to prove pointer and keyboard delivery.
+--]]
+
+   include 'vector'
+   import './draw', './layout'
+
+   namespace screen { }
+
+local W <const> = layout.data.lcd.pixelsX
+local H <const> = layout.data.lcd.pixelsY
+local STATUS_H <const> = 23 -- Status bar height in calculator pixels
+
+screen.FIXTURES = array<str> { 'off', 'pattern', 'keytest' }
+
+local LCD_FONT = { face='Noto Sans', style='Bold' }
+
+local function buildPattern(VP:obj!)
+   draw.rect(VP, 0, 0, W, H, '#ffffff')
+   for x in {16 to W by 16} do draw.rect(VP, x, 0, 1, H, '#9be7f0') end
+   for y in {16 to H by 16} do draw.rect(VP, 0, y, W, 1, '#9be7f0') end
+   draw.rect(VP, 0, 0, W, 1, '#000000')
+   draw.rect(VP, 0, H - 1, W, 1, '#000000')
+   draw.rect(VP, 0, 0, 1, H, '#000000')
+   draw.rect(VP, W - 1, 0, 1, H, '#000000')
+   draw.rect(VP, (W * 0.5) - 0.5, (H * 0.5) - 12, 1, 24, '#ff0000')
+   draw.rect(VP, (W * 0.5) - 12, (H * 0.5) - 0.5, 24, 1, '#ff0000')
+
+   local bars = array<str> { '#ff0000', '#00ff00', '#0000ff', '#00ffff', '#ff00ff', '#ffff00', '#000000', '#808080' }
+   for i, colour in bars do draw.rect(VP, 32 + (i * 24), H - 56, 24, 24, colour) end
+
+   for y in {0 to 32} do
+      for x in {0 to 32} do
+         if ((x + y) % 2) is 0 then draw.rect(VP, 320 + x, 32 + y, 1, 1, '#000000') end
+      end
+   end
+   draw.text(VP, 32, 40, f'{W} x {H}', LCD_FONT, 16, '#000000', 'start')
+end
+
+local function buildKeyTest(VP:obj!, Handles:table!)
+   draw.rect(VP, 0, 0, W, H, '#ffffff')
+   draw.rect(VP, 0, 0, W, STATUS_H, '#000000')
+   Handles.status = draw.text(VP, W * 0.5, 17, 'Key test', LCD_FONT, 15, '#ffffff', 'middle')
+   Handles.modifier = draw.text(VP, W - 6, 17, '', LCD_FONT, 13, '#2db49e', 'end')
+   local rows = array<table> {
+      { 'key', 'Key' }, { 'action', 'Action' }, { 'source', 'Source' }, { 'commits', 'Commits' }
+   }
+   for i, row in rows do
+      local y = 52 + (i * 34)
+      draw.text(VP, 12, y, row[1], LCD_FONT, 16, '#606060', 'start')
+      Handles[row[0]] = draw.text(VP, 110, y, '-', LCD_FONT, 20, '#000000', 'start')
+   end
+end
+
+-- Create the screen in Layer.  Returns a screen handle.
+
+screen.build = function(Layer:obj!, Skin:table!):table
+   local L = layout.data.lcd
+   local viewport = Layer.new('VectorViewport', {
+      x = L.x, y = L.y, width = L.width, height = L.height, viewX = 0, viewY = 0, viewWidth = W, viewHeight = H,
+      overflow = 'hidden'
+   })
+   return { viewport=viewport, skin=Skin, fixture=nil, handles={ } }
+end
+
+-- Switch the screen to a fixture, rebuilding the screen subtree.
+
+screen.setFixture = function(Screen:table!, Name:str!)
+   if Screen.fixture is Name then return end
+   Screen.viewport.acClear()
+   Screen.handles = { }
+   Screen.fixture = Name
+   if Name is 'off' then
+      draw.rect(Screen.viewport, 0, 0, W, H, Screen.skin.colours.lcdOff)
+   elseif Name is 'pattern' then
+      buildPattern(Screen.viewport)
+   elseif Name is 'keytest' then
+      buildKeyTest(Screen.viewport, Screen.handles)
+   else
+      raise f'Unknown screen fixture "{Name}"'
+   end
+end
+
+-- Reflect calculator State on the current fixture.  Only referenced text vectors are changed.
+
+local MODIFIER_TEXT = { none='', shift='SHIFT' }
+
+screen.update = function(Screen:table!, State:table!, KeyName:str)
+   local h = Screen.handles
+   if Screen.fixture != 'keytest' then return end
+   h.key.string = KeyName or '-'
+   h.action.string = State.lastAction or '-'
+   h.source.string = State.lastSource or '-'
+   h.commits.string = tostring(State.commits)
+   h.modifier.string = MODIFIER_TEXT[State.modifier] or ''
+end

@@ -1,0 +1,159 @@
+-- $TIRI
+--[[
+Assembles the calculator face in a root viewport whose view box is the 880 x 1875 canonical coordinate system.  The
+layers are created in drawing order:
+
+   shell   Case, glass, marks and printed legends (static).
+   keys    Key caps; a press moves a cap without rebuilding it.
+   screen  The 384 x 264 LCD viewport.
+   focus   Keyboard focus ring around the case.
+   debug   Opt-in landmark overlay and calibration reference.
+   hits    Transparent per-key viewports: the only layer subscribed to pointer input.
+
+The application script and the UI tests both build the face through face.build(), so tests exercise the real scene.
+--]]
+
+   include 'display', 'vector'
+   import './layout', './palette', './shell', './controls', './screen', './debug', '../keymap', '../app'
+
+   namespace face { }
+
+-- Options: skin (name), fixture (screen fixture), debug (bool), reference (path), referenceOpacity (0 - 1),
+-- focusRing (bool: show keyboard focus), onRedraw (function), onKey (function(Qualifiers, Code) called before
+-- calculator dispatch; return true to consume the event), onCommand (function(Name) for the application commands
+-- 'help' and 'close') and trace (function).
+--
+-- Root receives the keyboard subscription, so desktop keys reach the calculator whenever Root is in the focus chain.
+
+face.build = function(Root:obj!, Scene:obj!, Options:table!):table
+   local skin = palette.get(Options.skin or 'neutral')
+   local L = layout.data
+   local F = { skin=skin, fixture=Options.fixture or 'keytest', options=Options }
+
+   local function layer(Name:str!):obj
+      return Root.new('VectorViewport', { x=0, y=0, width=L.view.width, height=L.view.height, name=Name })
+   end
+
+   controls.defs(Scene, skin)
+   F.shellLayer = layer('shell_layer')
+   shell.build(F.shellLayer, Scene, skin)
+   F.keyLayer = layer('key_layer')
+   F.visuals = controls.buildKeys(F.keyLayer, skin)
+   F.screenLayer = layer('screen_layer')
+   F.screen = screen.build(F.screenLayer, skin)
+
+   F.focusLayer = layer('focus_layer')
+   F.focusRing = F.focusLayer.new('VectorRectangle', { x=2, y=2, width=L.view.width - 4, height=L.view.height - 4,
+      roundX=L.case.radius - 2, roundY=L.case.radius - 2, fill='none', stroke=skin.colours.focus, strokeWidth=4,
+      visibility=VIS_HIDDEN })
+
+   if Options.debug or Options.reference then
+      F.debugLayer = layer('debug_layer')
+      if Options.reference then
+         debugview.reference(F.debugLayer, Scene, Options.reference, Options.referenceOpacity or 0.5)
+      end
+      if Options.debug then F.debugHandles = debugview.build(F.debugLayer) end
+   end
+
+   local function redraw()
+      if Options.onRedraw then Options.onRedraw() end
+   end
+
+   local function refreshScreen()
+      local state = F.ctl.state
+      screen.setFixture(F.screen, F.fixture)
+      local key = state.lastKey and keymap.get(state.lastKey)
+      screen.update(F.screen, state, key and key.name)
+      redraw()
+   end
+
+   F.ctl = app.new({
+      keyVisual = function(Key:table!, Down:bool!)
+         controls.setPressed(F.visuals, Key.id, Down)
+         redraw()
+      end,
+      changed = function(State:table!, Effects:array<table>!)
+         -- Screen transitions and commands are deferred until input processing has finished, because a command may
+         -- open a window or free this one.
+         processing.delayedCall(refreshScreen)
+         for _, effect in Effects do
+            if (effect[0] is 'command') and Options.onCommand then
+               local name = effect[1]
+               processing.delayedCall(function() Options.onCommand(name) end)
+            end
+         end
+      end,
+      trace = Options.trace
+   })
+
+   F.hitLayer = layer('hit_layer')
+   F.hits = controls.buildHits(F.hitLayer, F.ctl)
+
+   Root.mtSubscribeKeyboard(function(Viewport:obj!, Qualifiers:num!, Code:num!, Unicode:any)
+      if Options.onKey and Options.onKey(Qualifiers, Code) then return end
+      face.keyboard(F, Qualifiers, Code, Unicode)
+   end)
+
+   -- Key releases are not received after the focus is lost, so keys held on the desktop keyboard are let go then.
+
+   Root.mtSubscribeFeedback(FM_HAS_FOCUS | FM_CHILD_HAS_FOCUS | FM_LOST_FOCUS, function(Viewport:obj!, Event:num!)
+      if Event is FM_LOST_FOCUS then face.releaseKeyboard(F) end
+      if Options.focusRing then
+         face.setFocus(F, Event != FM_LOST_FOCUS)
+         redraw()
+      end
+   end)
+
+   refreshScreen()
+   return F
+end
+
+-- Show or hide the keyboard focus ring.
+
+face.setFocus = function(F:table!, Focused:bool!)
+   F.focusRing.visibility = Focused ? VIS_VISIBLE : VIS_HIDDEN
+end
+
+-- Route a desktop keyboard event to the calculator.  Returns true if the event was consumed.  Any new key press,
+-- bound or not, turns a held tap key (desktop Shift) into a modifier for that press, so Shift+Tab and Shift+9 for '('
+-- do not also apply the calculator's Shift.
+
+face.keyboard = function(F:table!, Qualifiers:num!, Code:num!, Unicode:any):bool
+   F.keysDown ?= { }
+   if Qualifiers has KQ_PRESSED then
+      if Qualifiers has KQ_REPEAT then
+         local id = F.keysDown[Code]
+         if id then app.pressKey(F.ctl, id, 'keyboard', true) end
+         return id != nil
+      end
+      app.breakTaps(F.ctl)
+      local key, binding = keymap.lookup(Qualifiers, Code, (Unicode is <num>) ? Unicode : 0)
+      if not key then return false end
+      F.keysDown[Code] = key.id
+      app.pressKey(F.ctl, key.id, 'keyboard', false, binding.tap)
+      return true
+   elseif Qualifiers has KQ_RELEASED then
+      local id = F.keysDown[Code]
+      if not id then return false end
+      F.keysDown[Code] = nil
+      app.releaseKey(F.ctl, id, 'keyboard')
+      return true
+   end
+   return false
+end
+
+-- Let go of every key held on the desktop keyboard without committing it.
+
+face.releaseKeyboard = function(F:table!)
+   if not F.keysDown then return end
+   for _, id in F.keysDown do app.cancelKey(F.ctl, id, 'keyboard') end
+   F.keysDown = { }
+end
+
+-- Update the render-time readout of the debug layer.
+
+face.showTiming = function(F:table!, Scene:obj!)
+   if F.debugHandles then
+      F.debugHandles.timing.string = f'render {Scene.renderTime} µs'
+   end
+end

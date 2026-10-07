@@ -1,0 +1,99 @@
+-- $TIRI
+--[[
+The help manual window, opened by the HELP (?) key.  The manual is the RIPL document docs/manual.rpl, shown in an
+ordinary framed window with a vertical scrollbar.  Only one manual window exists; opening it again brings it to the
+front.  Links that carry an @uri attribute are handed to the desktop with OpenURI(), so that external references
+open in the user's browser rather than replacing the manual.
+--]]
+
+   import 'gui', 'gui/window', 'gui/scrollbar'
+   include 'display', 'vector', 'document'
+
+   namespace manual { }
+
+   module display as mGfx
+
+local WIDTH <const>  = 620
+local HEIGHT <const> = 720
+local GAP <const>    = 16 -- Space between the calculator and the manual
+
+local lWindow -- The open manual window, or nil
+
+-- Report whether the manual window is open.
+
+manual.isOpen = function():bool
+   return (lWindow != nil) and (lWindow.surface != nil) and lWindow.surface.exists()
+end
+
+-- Return the open manual window, or nil.
+
+manual.window = function():table
+   if manual.isOpen() then return lWindow end
+end
+
+-- Place the manual beside the surface Beside, so that it does not hide the calculator: to the right if it fits on
+-- the monitor, otherwise to the left.  Returns nil without a surface.
+
+local function placement(Beside:obj):<num, num>
+   if not Beside then return nil, nil end
+   local x = Beside.x + Beside.width + GAP
+   local err, display = mGfx.GetDisplayInfo(Beside.display)
+   if (err is ERR_Okay) and (x + WIDTH > display.monitorWidth) then
+      x = math.max(1, Beside.x - WIDTH - GAP)
+   end
+   return x, Beside.y
+end
+
+-- Open the manual at Path, or bring an open manual to the front.  Options may give 'beside', the calculator's
+-- surface, to place a new manual window next to it.  Returns the window table.
+
+manual.open = function(Path:str!, Options:table):table
+   if manual.isOpen() then
+      lWindow.moveToFront()
+      return lWindow
+   end
+
+   local x, y = placement(Options?.beside)
+   lWindow = gui.window({
+      title        = 'Calcula Help',
+      x            = x,
+      y            = y,
+      icon         = 'items/help',
+      quit         = false, -- Closing the manual leaves the calculator running
+      insideWidth  = WIDTH,
+      insideHeight = HEIGHT,
+      minWidth     = 360,
+      minHeight    = 300,
+      events       = { close = function(Window:table) lWindow = nil end }
+   })
+
+   -- External links are opened by the desktop.  A manual that fails to load must not leave an empty window behind.
+
+   local function linkActivated(Document:obj, EventFlag:num, Parameters:table)
+      if (EventFlag has DEF_LINK_ACTIVATED) and Parameters and Parameters.uri then
+         local err = mSys.OpenURI(Parameters.uri)
+         if err != ERR_Okay then msg(f'Failed to open {Parameters.uri}: {mSys.GetErrorMsg(err)}') end
+      end
+   end
+
+   local view = lWindow.viewport.new('VectorViewport', { x=0, y=0, xOffset=0, yOffset=0 })
+   local doc
+   try
+      doc = view.new('document', { path=Path .. '#Index', eventMask='LinkActivated', eventCallback=linkActivated })
+   except
+      manual.close()
+      raise
+   end
+   gui.scrollbar({ target=view, view=doc.view, page=doc.page, direction='vertical' })
+
+   lWindow.document = doc
+   lWindow.show()
+   return lWindow
+end
+
+-- Close the manual window if it is open.
+
+manual.close = function()
+   if manual.isOpen() then lWindow.surface.free() end
+   lWindow = nil
+end

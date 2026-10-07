@@ -1,0 +1,137 @@
+-- $TIRI
+--[[
+Calculator lifecycle, input unification and the top-level reducer.
+
+Pointer and desktop keyboard input reach the calculator only through app.pressKey(), app.releaseKey() and
+app.cancelKey().  These perform the visual depression of the key (through the 'keyVisual' hook), modifier handling,
+semantic dispatch and repeat suppression, so pointer and keyboard behaviour cannot drift apart.
+
+A key commits its action exactly once per press:
+   - keyboard: when pressed (and again on auto-repeat if the key permits repeats);
+   - keyboard tap (a desktop Shift key): when released, unless another key committed or was pressed meanwhile;
+   - pointer:  when released inside the key outline.  Releasing outside cancels the press.
+
+Commits pass through app.reduce(State, Action), which returns the new state's effects as a list such as
+{ 'redraw' }, { 'semantic', name } or { 'command', name }.  The visual layer observes state; it never mutates it.
+Milestone 0 handles the Shift modifier only; mathematical actions are recorded as semantic effects for later
+milestones.  Application commands (app.COMMANDS) are not calculator functions: the host carries them out.
+--]]
+
+   import './keymap'
+
+   namespace app { }
+
+-- Actions that belong to the desktop application rather than the calculator: HELP opens the manual and OFF closes the
+-- window.  The Shift modifier still applies to them, so a pending Shift is cleared.
+
+app.COMMANDS = { help=true, close=true }
+
+-- Create a calculator controller.  Hooks may define keyVisual(Key, Down), changed(State, Effects) and trace(Line).
+
+app.new = function(Hooks:table):table
+   local ctl = {
+      hooks = Hooks or { },
+      state = {
+         modifier = 'none', -- 'none' or 'shift'
+         lastKey  = nil,
+         lastSource = nil,
+         lastAction = nil,
+         commits  = 0
+      },
+      held  = { },          -- Pressed keys, by ID: { source, tap }
+      trace = array<str>    -- Ordered record of commits as 'source:key:action'
+   }
+   return ctl
+end
+
+-- Apply the Shift modifier or resolve the semantic action of a key under the current modifier.  Shift is one-shot:
+-- it applies to the next key only.
+
+local function resolveAction(State:table!, Key:table!):<str, str>
+   if Key.id is 'shift' then
+      return 'shift', ((State.modifier is 'shift') ? 'none' : 'shift')
+   end
+   if (State.modifier is 'shift') and Key.shiftAction then return Key.shiftAction, 'none' end
+   return Key.action, 'none'
+end
+
+-- The reducer.  Action is { type='key', key=Descriptor }.  Mutates State in place and returns a list of effects.
+
+app.reduce = function(State:table!, Action:table!):array<table>
+   local effects = array<table>
+   if Action.type != 'key' then return effects end
+   local key = Action.key
+
+   local action, next_mod = resolveAction(State, key)
+   State.modifier = next_mod
+   State.lastKey = key.id
+   State.lastAction = action
+   State.commits++
+
+   if app.COMMANDS[action] then
+      effects.push({ 'command', action })
+   elseif action != 'shift' then
+      effects.push({ 'semantic', action })
+   end
+   effects.push({ 'redraw' })
+   return effects
+end
+
+-- Another key was used while a tap key is held, so the tap key acts as a modifier and will not commit on release.
+
+app.breakTaps = function(Ctl:table!)
+   for _, held in Ctl.held do held.tap = false end
+end
+
+local function commit(Ctl:table!, Key:table!, Source:str!)
+   app.breakTaps(Ctl)
+   Ctl.state.lastSource = Source
+   local effects = app.reduce(Ctl.state, { type='key', key=Key })
+   local line = f'{Source}:{Key.id}:{Ctl.state.lastAction or "-"}'
+   Ctl.trace.push(line)
+   if Ctl.hooks.trace then Ctl.hooks.trace(line) end
+   if Ctl.hooks.changed then Ctl.hooks.changed(Ctl.state, effects) end
+end
+
+-- A key goes down.  Source is 'pointer' or 'keyboard'.  Repeat is true for keyboard auto-repeat events.  Tap is true
+-- for a keyboard key that commits on release (see app.breakTaps()).
+
+app.pressKey = function(Ctl:table!, ID:str!, Source:str!, Repeat:bool, Tap:bool)
+   local key = keymap.get(ID)
+   if Repeat then
+      if key.repeats and Ctl.held[ID] then commit(Ctl, key, Source) end
+      return
+   end
+   if Ctl.held[ID] then return end -- Already down from another source
+   Ctl.held[ID] = { source=Source, tap=(Tap is true) }
+   if Ctl.hooks.keyVisual then Ctl.hooks.keyVisual(key, true) end
+   if (Source is 'keyboard') and (Tap != true) then commit(Ctl, key, Source) end
+end
+
+-- A key comes up.  Pointer presses and unbroken taps commit here; other keyboard presses committed when they went
+-- down.
+
+app.releaseKey = function(Ctl:table!, ID:str!, Source:str!)
+   local held = Ctl.held[ID]
+   if (not held) or (held.source != Source) then return end
+   Ctl.held[ID] = nil
+   local key = keymap.get(ID)
+   if Ctl.hooks.keyVisual then Ctl.hooks.keyVisual(key, false) end
+   if (Source is 'pointer') or held.tap then commit(Ctl, key, Source) end
+end
+
+-- A key comes up without committing, e.g. the pointer was released outside the key.
+
+app.cancelKey = function(Ctl:table!, ID:str!, Source:str!)
+   local held = Ctl.held[ID]
+   if (not held) or (held.source != Source) then return end
+   Ctl.held[ID] = nil
+   if Ctl.hooks.keyVisual then Ctl.hooks.keyVisual(keymap.get(ID), false) end
+end
+
+-- Show or hide the press state of a held pointer key without changing what is held (pointer dragged off a key).
+
+app.hoverHeld = function(Ctl:table!, ID:str!, Inside:bool!)
+   local held = Ctl.held[ID]
+   if held and Ctl.hooks.keyVisual then Ctl.hooks.keyVisual(keymap.get(ID), Inside) end
+end

@@ -1,0 +1,227 @@
+-- $TIRI
+--[[
+Vector keys, the hit layer and press feedback.
+
+Every key is drawn from its keymap descriptor.  The cap (outline ring, shaded face and top legend) lives in its own
+viewport so that a press moves it down and swaps the face gradient without rebuilding anything.  A static shadow under
+each cap is uncovered when the cap moves.
+
+The hit layer holds one transparent viewport per key, placed on the descriptor's bounding box.  It is the only layer
+subscribed to pointer input.  Presses are accepted only inside the key outline (layout.pointInKey), so hit testing
+matches the drawn shape rather than the bounding box.  Hit viewports persist for the life of the scene and are never
+freed from inside their own input callbacks.
+--]]
+
+   include 'display', 'vector'
+   import './draw', './icons', './layout', '../keymap', '../app'
+
+   namespace controls { }
+
+local PRESS_DY <const> = 2.5 -- Cap travel in logical units
+
+-- Legend sizes by key font, as cap heights in logical units.
+
+local TEXT_CAP = { key=24, digit=44, help=32, large_key=34, punct=40 }
+
+-- Icon box sizes by key shape.
+
+local ICON_SIZE = { small=52, large=80, arrow=46, ok=50, rocker=62 }
+
+local function shade(Colour:str!, Factor:num!):str
+   local r, g, b = draw.rgb(Colour)
+   local function c(V:num):num return math.clamp(math.round(V * Factor * 255), 0, 255) end
+   return string.format('#%02x%02x%02x', c(r), c(g), c(b))
+end
+
+-- Register the face gradients for one face style.  Each style has a normal and a pressed variant.
+
+local function faceDefs(Scene:obj!, Style:str!, Top:str!, Mid:str!, Low:str!)
+   draw.gradient(Scene, 'GradientLinear', f'face_{Style}', array<table> { { 0, Top }, { 0.55, Mid }, { 1, Low } },
+      { x1=0, y1=0, x2=0, y2=1 })
+   draw.gradient(Scene, 'GradientLinear', f'face_{Style}_down', array<table> {
+      { 0, shade(Low, 0.97) }, { 0.6, shade(Mid, 0.92) }, { 1, shade(Mid, 0.95) }
+   }, { x1=0, y1=0, x2=0, y2=1 })
+end
+
+controls.defs = function(Scene:obj!, Skin:table!)
+   local C = Skin.colours
+   faceDefs(Scene, 'light', C.lightFaceTop, C.lightFace, C.lightFaceLow)
+   faceDefs(Scene, 'dark', C.darkFaceTop, C.darkFace, C.darkFaceLow)
+   faceDefs(Scene, 'shift', shade(C.shiftFace, 1.08), C.shiftFace, shade(C.shiftFace, 0.88))
+end
+
+local function glyphColour(Key:table!, C:table!):str
+   if Key.face is 'light' then return C.lightGlyph end
+   if Key.face is 'shift' then return C.shiftGlyph end
+   return C.darkGlyph
+end
+
+-- Draw the top legend of Key centred on CX, CY in the cap viewport.
+
+local function drawLegend(Cap:obj!, Key:table!, CX:num!, CY:num!, Skin:table!)
+   local p = Key.primary
+   local g = Key.geometry
+   local colour = glyphColour(Key, Skin.colours)
+   if p.icon then
+      local accent = (Key.face is 'light') ? Skin.colours.lightFace : nil
+      icons.draw(Cap, p.icon, CX, CY, ICON_SIZE[g.shapeName], colour, accent)
+      return
+   end
+
+   local font = Skin.fonts[p.font]
+   local cap
+   if p.font is 'digit' then
+      cap = TEXT_CAP.digit
+   elseif p.text is '?' then
+      cap = TEXT_CAP.help
+   elseif (p.text is ',') or (p.text is '(') or (p.text is ')') then
+      cap = TEXT_CAP.punct
+   elseif g.shapeName is 'large' then
+      cap = TEXT_CAP.large_key
+   else
+      cap = TEXT_CAP.key
+   end
+
+   -- Lower-case legends (sin, cos, tan) are centred on their x-height rather than their cap height, and parentheses
+   -- on their full height, as they rise above the cap height and descend below the baseline.
+
+   local is_lower = (p.text is 'sin') or (p.text is 'cos') or (p.text is 'tan')
+   local baseline = CY + (cap * (is_lower ? 0.36 : 0.5))
+   if p.text is ',' then
+      baseline = CY + (cap * 0.2)
+   elseif (p.text is '(') or (p.text is ')') then
+      baseline = CY + (cap * 0.38)
+   end
+   draw.text(Cap, CX, baseline, p.text, font, draw.capSize(cap), colour, 'middle')
+end
+
+-- Build a round key cap: outline ring, face and legend.  Returns the face so that its fill can be switched.
+
+local function roundCap(Cap:obj!, Key:table!, Skin:table!):obj
+   local g = Key.geometry
+   local r = g.shape.radius
+   local cx, cy = g.width * 0.5, g.height * 0.5
+   draw.circle(Cap, cx, cy, r, Skin.colours.keyRing)
+   local face = draw.circle(Cap, cx, cy, r - g.shape.face, f'url(#face_{Key.face})')
+   draw.circle(Cap, cx, cy, r - g.shape.face - 1, nil, { stroke='#ffffff', width=1.2, opacity=0.18 })
+   drawLegend(Cap, Key, cx, cy, Skin)
+   return face
+end
+
+-- The page rocker is one pill split into two keys.  The pill is drawn once; each half has an overlay that darkens it
+-- while pressed, and its own legend.
+
+local function buildRocker(Layer:obj!, Skin:table!, Visuals:table!)
+   local R = layout.data.rocker
+   local S = layout.data.shapes.rocker
+   local x, y = R.cx - (S.width * 0.5), R.cy - (S.height * 0.5)
+   local r = S.width * 0.5
+   draw.rect(Layer, x + 0.5, y + 3, S.width, S.height, '#000000', { round=r, opacity=0.45 })
+   draw.rect(Layer, x, y, S.width, S.height, Skin.colours.keyRing, { round=r })
+   draw.rect(Layer, x + S.face, y + S.face, S.width - (S.face * 2), S.height - (S.face * 2),
+      'url(#face_dark)', { round=r - S.face })
+
+   for _, id in array<str> { 'page_up', 'page_down' } do
+      local key = keymap.get(id)
+      local g = key.geometry
+      local upper = (g.half is 'upper')
+      local shade_path = draw.roundRectPath(x + S.face, upper ? y + S.face : R.cy, S.width - (S.face * 2),
+         (S.height * 0.5) - S.face, upper ? r - S.face : 0, upper ? 0 : r - S.face)
+      local overlay = draw.path(Layer, shade_path, '#000000', { opacity=0.35 })
+      overlay.visibility = VIS_HIDDEN
+      icons.draw(Layer, key.primary.icon, g.cx, g.cy + (upper ? -8 : 8), ICON_SIZE.rocker, Skin.colours.darkGlyph)
+      Visuals[id] = { overlay=overlay }
+   end
+end
+
+-- The black cross that holds the cursor keys: five discs joined by bars.
+
+local function buildDpadWell(Layer:obj!, Skin:table!)
+   local D = layout.data.dpad
+   local fill = Skin.colours.dpadBody
+   for _, id in array<str> { 'up', 'left', 'ok', 'right', 'down' } do
+      local g = layout.keyGeometry(id)
+      draw.circle(Layer, g.cx, g.cy, D.discRadius, fill)
+   end
+   local up, down = layout.keyGeometry('up'), layout.keyGeometry('down')
+   local left, right = layout.keyGeometry('left'), layout.keyGeometry('right')
+   local half = D.barWidth * 0.5
+   draw.rect(Layer, D.cx - half, up.cy, D.barWidth, down.cy - up.cy, fill)
+   draw.rect(Layer, left.cx, D.cy - half, right.cx - left.cx, D.barWidth, fill)
+end
+
+-- Build the key layer.  Returns a table of visual handles by key ID for setPressed().
+
+controls.buildKeys = function(Layer:obj!, Skin:table!):table
+   local visuals = { }
+   buildDpadWell(Layer, Skin)
+   buildRocker(Layer, Skin, visuals)
+
+   for _, key in keymap.keys do
+      local g = key.geometry
+      if g.shape.kind is 'round' then
+         draw.circle(Layer, g.cx + 0.4, g.cy + 3, g.shape.radius + 0.5, '#000000', { opacity=0.5 })
+         local cap = Layer.new('VectorViewport', { x=g.x, y=g.y, width=g.width, height=g.height })
+         local face = roundCap(cap, key, Skin)
+         visuals[key.id] = { cap=cap, face=face, y=g.y, fill=f'url(#face_{key.face})',
+            downFill=f'url(#face_{key.face}_down)' }
+      end
+   end
+   return visuals
+end
+
+-- Show Key as pressed or released.
+
+controls.setPressed = function(Visuals:table!, ID:str!, Down:bool!)
+   local v = Visuals[ID]
+   v ?! return
+   if v.overlay then
+      v.overlay.visibility = Down ? VIS_VISIBLE : VIS_HIDDEN
+   else
+      v.cap.y = v.y + (Down ? PRESS_DY : 0)
+      v.face.fill = Down ? v.downFill : v.fill
+   end
+end
+
+-- Build the hit layer.  Each key receives a persistent transparent viewport.  Ctl is the app controller.  Returns
+-- the hit viewports by key ID.
+
+controls.buildHits = function(Layer:obj!, Ctl:table!):table
+   local hits = { }
+   for _, key in keymap.keys do
+      local g = key.geometry
+      local id = key.id
+      local vp = Layer.new('VectorViewport', { x=g.x, y=g.y, width=g.width, height=g.height, cursor=PTC_HAND,
+         name=f'hit_{id}' })
+      local pressed = false
+
+      local function inside(Msg:any):bool
+         return layout.pointInKey(id, g.x + Msg.x, g.y + Msg.y)
+      end
+
+      vp.mtSubscribeInput(JTYPE_BUTTON | JTYPE_MOVEMENT, function(Viewport:obj!, Msg:any)
+         repeat
+            if Msg.type is JET_LMB then
+               if Msg.value > 0 then
+                  if inside(Msg) then
+                     pressed = true
+                     app.pressKey(Ctl, id, 'pointer')
+                  end
+               elseif pressed then
+                  pressed = false
+                  if inside(Msg) then
+                     app.releaseKey(Ctl, id, 'pointer')
+                  else
+                     app.cancelKey(Ctl, id, 'pointer')
+                  end
+               end
+            elseif pressed and (Msg.type is JET_ABS_XY) then
+               app.hoverHeld(Ctl, id, inside(Msg))
+            end
+            Msg = Msg.next
+         until not Msg
+      end)
+      hits[id] = vp
+   end
+   return hits
+end

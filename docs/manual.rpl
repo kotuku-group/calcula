@@ -1,0 +1,99 @@
+<?xml version="1.0"?>
+
+<!-- The Calcula help manual, opened by the HELP (?) key or F1.  Links carrying an @uri attribute are opened in the
+     desktop browser by scripts/ui/manual.tiri.
+
+     Table 'columns' lists end with a comma: the RIPL parser stops counting at the final value and otherwise warns that
+     the list "did not define all 2 columns" (src/document/parsing.cpp). -->
+
+<info title="Calcula Help"/>
+
+<body fill="rgb(30 32 38)" font-fill="rgb(232 232 228)" font-face="Noto Sans" font-size="11pt" margins="1.5em"
+  link="rgb(79 195 247)"/>
+
+<template name="th">
+  <cell stroke="rgb(120 120 120)" stroke-width="1" border="bottom"><p><b><inject/></b></p></cell>
+</template>
+
+<template name="keyname">
+  <cell><p><b><inject/></b></p></cell>
+</template>
+
+<page name="Index">
+
+<h1>Calcula</h1>
+
+<p>Calcula is a desktop simulator of a colour graphing calculator, modelled on the Casio fx-CG100 and drawn entirely
+with vector graphics.  It is an independent project and is not affiliated with or endorsed by Casio.</p>
+
+<p>This version shows the calculator face and proves that every key works.  The screen reports the last key you
+pressed; calculations are not available yet.</p>
+
+<h2>Using the keys</h2>
+
+<p>Click a key to press it.  A key acts when you release the mouse button over it; move away before releasing to
+cancel.  Most keys can also be pressed from the desktop keyboard (see below).</p>
+
+<p indent="1em"><table collapsed="true" cell-padding="0.25em" columns="22%,78%," width="95%">
+<row><th>Key</th><th>Purpose</th></row>
+<row><keyname>?</keyname><cell><p>Opens this help.  Keyboard: F1.</p></cell></row>
+<row><keyname>OFF</keyname><cell><p>Closes Calcula.  Keyboard: Ctrl+Q.</p></cell></row>
+<row><keyname>SHIFT</keyname><cell><p>Selects the green function printed above the next key you press.  Press SHIFT again to
+cancel it.  Keyboard: tap Shift on its own, or Alt+S.  Holding Shift holds the SHIFT key down, but a Shift used to
+type a character such as ( does not select the green function.</p></cell></row>
+<row><keyname>AC</keyname><cell><p>Clears the entry.  Keyboard: Delete.</p></cell></row>
+<row><keyname>EXE</keyname><cell><p>Executes the entry.  Keyboard: Enter.  SHIFT then EXE inserts Ans, the last
+result.</p></cell></row>
+<row><keyname>÷</keyname><cell><p>Divides.  SHIFT then ÷ (≈) shows the result as an approximate decimal.</p></cell></row>
+</table></p>
+
+<p>Letters, spaces and quotation marks are typed on the desktop keyboard, so Calcula has no ALPHA key and does not
+print the A–Z letters above the keys.</p>
+
+<h2>Keyboard shortcuts</h2>
+
+<p indent="1em"><table collapsed="true" cell-padding="0.25em" columns="38%,62%," width="95%">
+<row><th>Desktop key</th><th>Calculator key</th></row>
+<row><cell><p>0–9 . + - * / ( ) , ^</p></cell><cell><p>The matching digit, operator or symbol</p></cell></row>
+<row><cell><p>Numeric keypad</p></cell><cell><p>Digits, decimal point, operators and EXE (Enter)</p></cell></row>
+<row><cell><p>Enter</p></cell><cell><p>EXE</p></cell></row>
+<row><cell><p>Arrow keys</p></cell><cell><p>Cursor keys</p></cell></row>
+<row><cell><p>Backspace</p></cell><cell><p>DEL</p></cell></row>
+<row><cell><p>Delete</p></cell><cell><p>AC</p></cell></row>
+<row><cell><p>Escape</p></cell><cell><p>Back</p></cell></row>
+<row><cell><p>Home</p></cell><cell><p>HOME</p></cell></row>
+<row><cell><p>Tab, Shift+Tab</p></cell><cell><p>Next and previous tab</p></cell></row>
+<row><cell><p>Page Up, Page Down</p></cell><cell><p>Page rocker</p></cell></row>
+<row><cell><p>F1</p></cell><cell><p>? (help)</p></cell></row>
+<row><cell><p>Ctrl+Q</p></cell><cell><p>OFF (close Calcula)</p></cell></row>
+<row><cell><p>Shift (tapped alone), Alt+S</p></cell><cell><p>SHIFT</p></cell></row>
+<row><cell><p>Alt+E</p></cell><cell><p>Settings</p></cell></row>
+<row><cell><p>Alt+K</p></cell><cell><p>OK</p></cell></row>
+<row><cell><p>Alt+V, Alt+C, Alt+T</p></cell><cell><p>VARIABLE, CATALOG, TOOLS</p></cell></row>
+<row><cell><p>Alt+X</p></cell><cell><p>x, θ, T</p></cell></row>
+<row><cell><p>Alt+/</p></cell><cell><p>Fraction</p></cell></row>
+<row><cell><p>Alt+R, Alt+Q</p></cell><cell><p>Square root, square</p></cell></row>
+<row><cell><p>Alt+N, Alt+P</p></cell><cell><p>e to the power x, ×10 to the power x</p></cell></row>
+<row><cell><p>Alt+F</p></cell><cell><p>FORMAT</p></cell></row>
+</table></p>
+
+<p>Plain letters are never captured by the calculator, so they remain free for typing.</p>
+
+<h2>Moving and resizing the window</h2>
+
+<p>Calcula's window has no title bar.  To move it, press anywhere on the calculator that is not a key and drag.  To
+resize it, drag the grip at the bottom-right corner of the case; ridges appear there when the pointer is over it.  The
+calculator always keeps its shape.</p>
+
+<h2>The screen</h2>
+
+<p>The display is 384 × 264 pixels.  The fx-CG100's display is 384 × 216; Calcula's is taller to make better use of the
+space above it.</p>
+
+<h2>Calculator reference</h2>
+
+<p>For the behaviour of the calculator's apps and functions, see Casio's
+<a @uri="https://support.casio.com/global/en/calc/manual/fx-CG100_1AUGRAPHv220_en/">fx-CG100 online guide</a>
+(opens in your web browser).  Calcula follows version 2.20 of the guide.</p>
+
+</page>

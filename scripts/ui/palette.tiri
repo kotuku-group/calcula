@@ -1,0 +1,109 @@
+-- $TIRI
+--[[
+Skins for the calculator shell.  A skin supplies colours, fonts and the printed marks; geometry always comes from
+layout.tiri, so every skin shares the same key positions and hit regions.
+
+'fidelity' reproduces the fx-CG100 colours sampled from Casio's official front render (median colours of the masked
+regions, measured 2026-10-07).  It shows the product marks and is intended for private comparison only; see the
+artwork and trademark policy in the implementation proposal before distributing it.
+
+'neutral' keeps the layout and the functional Shift colour coding but drops the Casio marks and shifts the case
+colour, so that the simulator is not presented as a Casio product.  It is the default.
+
+Fonts are substitutes for Casio's condensed legend face, chosen from fonts installed with Kōtuku.  Legends use Noto
+Sans Bold with a horizontal condense factor applied by a transform (Noto Sans has no installed condensed style).
+A 'tracked' font spreads its letters evenly across the measured width of a mark.
+--]]
+
+   namespace palette { }
+
+local common = {
+   keyRing       = '#141414',
+   lightFaceTop  = '#d6d6d6',
+   lightFace     = '#c8c8c8',
+   lightFaceLow  = '#bcbcbc',
+   lightGlyph    = '#353535',
+   darkFaceTop   = '#404040',
+   darkFace      = '#333333',
+   darkFaceLow   = '#262626',
+   darkGlyph     = '#a5a5a5',
+   dpadBody      = '#0c0c0c',
+   rockerFace    = '#2c2c2c',
+   shiftFace     = '#34bd9d',
+   shiftGlyph    = '#239a7f',
+   shiftLegend   = '#2db49e',
+   label         = '#eeebe4',
+   glass         = '#000000',
+   glassEdge     = '#3a3a3a',
+   lcdFrame      = '#4a4a4a',
+   lcdOff        = '#050505',
+   pressShade    = '#000000',
+   focus         = '#4fc3f7'
+}
+
+local fonts = {
+   legend = { face='Noto Sans', style='Bold', condense=0.86 },
+   label  = { face='Noto Sans', style='Bold', condense=0.86 },
+   key    = { face='Noto Sans', style='Bold', condense=0.86 },
+   digit  = { face='Noto Sans', style='Regular', condense=0.94 },
+   brand  = { face='Noto Sans', style='Black', condense=1.0 },
+   model  = { face='Noto Sans', style='Bold', condense=0.92 },
+   series = { face='Noto Sans', style='Regular', condense=0.8, tracked=true } -- Letters spread evenly over the mark
+}
+
+local function skin(Overrides:table!):table
+   local result = { colours = { }, fonts = fonts }
+   for k, v in pairs(common) do result.colours[k] = v end
+   for k, v in pairs(Overrides) do
+      if k is 'colours' then
+         for ck, cv in pairs(v) do result.colours[ck] = cv end
+      else
+         result[k] = v
+      end
+   end
+   return result
+end
+
+palette.skins = {
+   fidelity = skin({
+      name = 'fidelity',
+      marks = { brand='CASIO', model='fx-CG100', series='CLASSWIZ CG' },
+      colours = {
+         caseEdge  = '#2c2c2c',
+         caseLine  = '#4a4a4a',
+         rimOuter  = '#252525',
+         rimInner  = '#1b1b1b',
+         rimRidge  = '#383838',
+         deck      = '#2f2f2f',
+         deckLow   = '#2a2a2a',
+         brand     = '#acaca9',
+         model     = '#d8d8d6',
+         series    = '#bbbbb8'
+      }
+   }),
+
+   neutral = skin({
+      name = 'neutral',
+      marks = { brand='CALCULA', model='CG-SIM', series='VECTOR CALCULATOR' },
+      colours = {
+         caseEdge  = '#2e3136',
+         caseLine  = '#50555c',
+         rimOuter  = '#2b2e33',
+         rimInner  = '#1f2125',
+         rimRidge  = '#40444a',
+         deck      = '#30333a',
+         deckLow   = '#2a2d33',
+         brand     = '#9aa3ad',
+         model     = '#c9d0d8',
+         series    = '#9aa3ad'
+      }
+   })
+}
+
+palette.names = array<str> { 'neutral', 'fidelity' }
+
+palette.get = function(Name:str!):table
+   local result = palette.skins[Name]
+   result ?! raise f'Unknown skin "{Name}"'
+   return result
+end

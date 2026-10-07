@@ -1,0 +1,130 @@
+-- $TIRI
+--[[
+Window controls for the borderless host window.  A taskbar window (SPT_TASKBAR) is created without the desktop's
+frame, so Calcula provides its own:
+
+   drag    Pressing on any part of the face that is not a key moves the window.  Keys own their hit regions, and input
+           is delivered only to the front-most subscriber under the cursor, so the root viewport receives a press only
+           when no key claims it.  The scene then holds a button lock on the root, so movement keeps arriving until
+           the button is released.
+   resize  A grip over the bottom-right corner of the case resizes the window with its aspect ratio preserved.  The
+           grip's ridges are shown only while the pointer is over it or a resize is in progress, so snapshots and the
+           fidelity skin are unaffected.
+
+Desktop cursor coordinates are used for both, so moving or resizing the window does not feed back into the
+calculation.
+--]]
+
+   include 'display', 'vector'
+   import './draw', './layout'
+
+   namespace host { }
+
+   module display as mGfx
+
+-- The grip covers the bottom-right corner of the case, clear of the EXE key.
+
+local GRIP = { x=800, y=1795, size=80 }
+
+local function cursorPos():<num, num>
+   local err, x, y = mGfx.GetCursorPos()
+   if err != ERR_Okay then return nil, nil end
+   return x, y
+end
+
+-- Diagonal ridges along the rounded corner, in grip coordinates.  Each ridge is centred on the corner's diagonal.
+
+local function buildRidges(Grip:obj!, Colour:str!):obj
+   local ridges = Grip.new('VectorViewport', { x=0, y=0, width=GRIP.size, height=GRIP.size, visibility=VIS_HIDDEN })
+   for _, ridge in array<table> { { 6, 6 }, { 18, 10 }, { 30, 14 } } do
+      local c = 47.2 - ridge[0] -- The 45 degree point of the case corner lies at 47.2, 47.2 in grip coordinates
+      local h = ridge[1]
+      draw.line(ridges, c - h, c + h, c + h, c - h, Colour, 3)
+   end
+   return ridges
+end
+
+-- Attach the controls to Root, the client viewport whose view box is the canonical coordinate system.  Options:
+--
+--    surface    The host window's surface (required).
+--    minWidth   Smallest permitted client width in pixels.
+--    maxWidth   Largest permitted client width in pixels.
+--    onMove     function(X, Y) that moves the window.  Defaults to Surface.acMoveToPoint().
+--    onResize   function(Width, Height) that resizes the client area.  Defaults to Surface.acResize().
+--    colour     Ridge colour.
+--
+-- Returns a handle with the grip viewport and the current drag and sizing state, for tests.
+
+host.attach = function(Root:obj!, Options:table!):table
+   local surface = Options.surface
+   local view = layout.data.view
+   local H = { grip=nil, drag=nil, sizing=nil, hover=false }
+
+   local move = Options.onMove or function(X:num!, Y:num!) surface.acMoveToPoint(X, Y, 0, MTF_X|MTF_Y) end
+   local resize = Options.onResize or function(Width:num!, Height:num!) surface.acResize(Width, Height, 0) end
+
+   local function redraw() surface.mtScheduleRedraw() end
+
+   Root.mtSubscribeInput(JTYPE_BUTTON | JTYPE_MOVEMENT, function(Viewport:obj!, Msg:any)
+      repeat
+         if Msg.type is JET_LMB then
+            H.drag = nil
+            if Msg.value > 0 then
+               local x, y = cursorPos()
+               if x then H.drag = { cursorX=x, cursorY=y, x=surface.x, y=surface.y } end
+            end
+         elseif H.drag and (Msg.type is JET_ABS_XY) then
+            local x, y = cursorPos()
+            if x then move(H.drag.x + x - H.drag.cursorX, H.drag.y + y - H.drag.cursorY) end
+         end
+         Msg = Msg.next
+      until not Msg
+   end)
+
+   H.grip = Root.new('VectorViewport', { name='resize_grip', x=GRIP.x, y=GRIP.y, width=GRIP.size,
+      height=GRIP.size, cursor=PTC_SIZE_BOTTOM_RIGHT })
+   H.ridges = buildRidges(H.grip, Options.colour or '#8c8c8c')
+
+   local function showRidges()
+      local visible = H.hover or (H.sizing != nil)
+      local state = visible ? VIS_VISIBLE : VIS_HIDDEN
+      if H.ridges.visibility != state then
+         H.ridges.visibility = state
+         redraw()
+      end
+   end
+
+   -- Horizontal and vertical cursor movement are averaged so that the window follows the cursor diagonally.
+
+   H.grip.mtSubscribeInput(JTYPE_BUTTON | JTYPE_MOVEMENT | JTYPE_CROSSING, function(Viewport:obj!, Msg:any)
+      repeat
+         if Msg.type is JET_CROSSED_IN then
+            H.hover = true
+            showRidges()
+         elseif Msg.type is JET_CROSSED_OUT then
+            H.hover = false
+            showRidges()
+         elseif Msg.type is JET_LMB then
+            H.sizing = nil
+            if Msg.value > 0 then
+               local x, y = cursorPos()
+               if x then H.sizing = { cursorX=x, cursorY=y, width=surface.width, height=surface.height } end
+            end
+            showRidges()
+         elseif H.sizing and (Msg.type is JET_ABS_XY) then
+            local x, y = cursorPos()
+            if x then
+               local s = H.sizing
+               local width = ((s.width + x - s.cursorX) + ((s.height + y - s.cursorY) * view.width / view.height)) * 0.5
+               width = math.round(math.clamp(width, Options.minWidth or 1, Options.maxWidth or width))
+               if width != surface.width then
+                  resize(width, math.round(width * view.height / view.width))
+               end
+            end
+         end
+         Msg = Msg.next
+      until not Msg
+   end)
+
+   return H
+end

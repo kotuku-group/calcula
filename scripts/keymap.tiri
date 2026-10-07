@@ -1,0 +1,227 @@
+-- $TIRI
+--[[
+The physical key matrix.  Each key has exactly one descriptor, and rendering, hit testing and dispatch all consume
+it; there is no separate hit map.  A descriptor contains:
+
+   id          Stable key identifier, also used as the layout key.
+   name        Accessibility and diagnostic name.
+   face        'light', 'dark' or 'shift': the key cap style.
+   primary     Legend on the key top: { text=S, font=F } or { icon=NAME }.  An optional 'sub' adds a second line.
+   shift       Green legend above-left of the key: { text=S } or { icon=NAME }, or nil.
+   label       Text printed above a navigation key ('HOME', 'SHIFT', ...), or nil.
+   action      Semantic action for an unmodified press.
+   shiftAction Semantic action after Shift, or nil.
+   bindings    Desktop keyboard bindings: { key=KEY_x, mods=KQ_x } or { char='c' } (matched on the typed character).
+               A binding with tap=true holds the key down for as long as the desktop key is held, and commits on
+               release only if no other key was used meanwhile.  This lets a desktop modifier double as a key.
+   repeats     True if holding the key repeats it.
+   geometry    Resolved geometry from layout.keyGeometry().
+
+Command keys use Alt+letter bindings by default, so that plain letters remain available for typing.  The numeric keypad
+is bound by key code as well as by typed character, so that it enters digits and operators whatever the Num Lock
+state.
+
+Calcula departs from the fx-CG100 where desktop conventions serve better:
+
+   - The Alpha key and its A-LOCK, A-Z letters and orange legends are not reproduced.  Letters, space and quotes are
+     typed on the desktop keyboard.  The key's position holds a HELP key (?), which opens the Calcula manual.
+   - The ON key is an OFF key that closes the window.  There is no power-off state, so AC has no Shift+AC OFF
+     function.
+   - Ans, which the fx-CG100 places on Alpha, is Shift+EXE.  The approximate-result function that Shift+EXE gives on
+     the fx-CG100 moves to Shift+÷.
+
+The 'help' and 'close' actions are application commands: face.tiri passes them to the host instead of the
+calculator.
+--]]
+
+   include 'display'
+   import './ui/layout'
+
+   namespace keymap { }
+
+local function key(Fields:table!):table
+   Fields.repeats ?= false
+   Fields.bindings ?= array<table>
+   Fields.geometry = layout.keyGeometry(Fields.id)
+   return Fields
+end
+
+local function alt(Code:num!):table return { key=Code, mods=KQ_ALT } end
+local function ctrl(Code:num!):table return { key=Code, mods=KQ_CTRL } end
+local function plain(Code:num!):table return { key=Code } end
+local function char(Char:str!):table return { char=Char } end
+local function tap(Code:num!, Mods:num!):table return { key=Code, mods=Mods, tap=true } end
+
+keymap.keys = array<table> {
+   -- Navigation deck, row 1
+
+   key({ id='off', name='Off (close the window)', face='dark', primary={ text='OFF', font='key' }, action='close',
+      bindings=array<table> { ctrl(KEY_Q) } }),
+   key({ id='home', name='Home', face='dark', primary={ icon='home' }, label='HOME', action='home',
+      bindings=array<table> { plain(KEY_HOME) } }),
+   key({ id='tab_prev', name='Previous tab', face='dark', primary={ icon='tab_prev' }, action='tab_prev',
+      bindings=array<table> { { key=KEY_TAB, mods=KQ_SHIFT } } }),
+   key({ id='up', name='Up', face='dark', primary={ icon='up' }, action='up', repeats=true,
+      bindings=array<table> { plain(KEY_UP) } }),
+   key({ id='tab_next', name='Next tab', face='dark', primary={ icon='tab_next' }, action='tab_next',
+      bindings=array<table> { plain(KEY_TAB) } }),
+   key({ id='page_up', name='Page up', face='dark', primary={ icon='page_up' }, action='page_up', repeats=true,
+      bindings=array<table> { plain(KEY_PAGE_UP) } }),
+
+   -- Navigation deck, row 2
+
+   key({ id='settings', name='Settings', face='dark', primary={ icon='settings' }, label='SETTINGS',
+      action='settings', bindings=array<table> { alt(KEY_E) } }),
+   key({ id='back', name='Back', face='dark', primary={ icon='back' }, action='back',
+      bindings=array<table> { plain(KEY_ESCAPE) } }),
+   key({ id='left', name='Left', face='dark', primary={ icon='left' }, action='left', repeats=true,
+      bindings=array<table> { plain(KEY_LEFT) } }),
+   key({ id='ok', name='OK', face='dark', primary={ text='OK', font='key' }, action='ok',
+      bindings=array<table> { alt(KEY_K) } }),
+   key({ id='right', name='Right', face='dark', primary={ icon='right' }, action='right', repeats=true,
+      bindings=array<table> { plain(KEY_RIGHT) } }),
+   key({ id='page_down', name='Page down', face='dark', primary={ icon='page_down' }, action='page_down',
+      repeats=true, bindings=array<table> { plain(KEY_PAGE_DOWN) } }),
+
+   -- Navigation deck, row 3
+
+   key({ id='shift', name='Shift', face='shift', primary={ icon='shift' }, label='SHIFT', action='shift',
+      bindings=array<table> { alt(KEY_S), tap(KEY_L_SHIFT, KQ_SHIFT), tap(KEY_R_SHIFT, KQ_SHIFT) } }),
+   key({ id='help', name='Help', face='light', primary={ text='?', font='key' }, label='HELP', action='help',
+      bindings=array<table> { plain(KEY_F1) } }),
+   key({ id='variable', name='Variable', face='light', primary={ icon='variable' }, label='VARIABLE',
+      action='variable', bindings=array<table> { alt(KEY_V) } }),
+   key({ id='down', name='Down', face='dark', primary={ icon='down' }, action='down', repeats=true,
+      bindings=array<table> { plain(KEY_DOWN) } }),
+   key({ id='catalog', name='Catalog', face='light', primary={ icon='catalog' }, label='CATALOG',
+      action='catalog', bindings=array<table> { alt(KEY_C) } }),
+   key({ id='tools', name='Tools', face='light', primary={ icon='tools' }, label='TOOLS', action='tools',
+      bindings=array<table> { alt(KEY_T) } }),
+
+   -- Scientific deck
+
+   key({ id='xtt', name='x theta T Y', face='light', primary={ icon='xtt' }, shift={ icon='store' },
+      action='var_x', shiftAction='store', bindings=array<table> { alt(KEY_X) } }),
+   key({ id='fraction', name='Fraction', face='light', primary={ icon='fraction' }, shift={ icon='mixed_fraction' },
+      action='fraction', shiftAction='mixed_fraction', bindings=array<table> { alt(KEY_SLASH) } }),
+   key({ id='sqrt', name='Square root', face='light', primary={ icon='sqrt' }, shift={ icon='nth_root' },
+      action='sqrt', shiftAction='nth_root', bindings=array<table> { alt(KEY_R) } }),
+   key({ id='power', name='Power', face='light', primary={ icon='power' }, shift={ icon='log_base' },
+      action='power', shiftAction='log_base', bindings=array<table> { char('^') } }),
+   key({ id='square', name='Square', face='light', primary={ icon='square' }, shift={ text='log' },
+      action='square', shiftAction='log', bindings=array<table> { alt(KEY_Q) } }),
+   key({ id='exp', name='Exponential', face='light', primary={ icon='exp' }, shift={ text='ln' },
+      action='exp', shiftAction='ln', bindings=array<table> { alt(KEY_N) } }),
+
+   key({ id='comma', name='Comma', face='light', primary={ text=',', font='key' }, shift={ text=':' },
+      action='comma', shiftAction='colon', bindings=array<table> { char(',') } }),
+   key({ id='sin', name='Sine', face='light', primary={ text='sin', font='key' }, shift={ text='sin⁻¹' },
+      action='sin', shiftAction='asin', bindings=array<table> { } }),
+   key({ id='cos', name='Cosine', face='light', primary={ text='cos', font='key' }, shift={ text='cos⁻¹' },
+      action='cos', shiftAction='acos', bindings=array<table> { } }),
+   key({ id='tan', name='Tangent', face='light', primary={ text='tan', font='key' }, shift={ text='tan⁻¹' },
+      action='tan', shiftAction='atan', bindings=array<table> { } }),
+   key({ id='lparen', name='Left parenthesis', face='light', primary={ text='(', font='key' }, shift={ text='=' },
+      action='lparen', shiftAction='equals', bindings=array<table> { char('(') } }),
+   key({ id='rparen', name='Right parenthesis', face='light', primary={ text=')', font='key' },
+      action='rparen', bindings=array<table> { char(')') } }),
+
+   -- Numeric deck
+
+   key({ id='d7', name='7', face='light', primary={ text='7', font='digit' }, shift={ text='π' },
+      action='digit_7', shiftAction='pi', bindings=array<table> { char('7'), plain(KEY_NP_7) } }),
+   key({ id='d8', name='8', face='light', primary={ text='8', font='digit' }, shift={ icon='angle' },
+      action='digit_8', shiftAction='angle', bindings=array<table> { char('8'), plain(KEY_NP_8) } }),
+   key({ id='d9', name='9', face='light', primary={ text='9', font='digit' }, shift={ text='i' },
+      action='digit_9', shiftAction='imaginary', bindings=array<table> { char('9'), plain(KEY_NP_9) } }),
+   key({ id='del', name='Delete', face='light', primary={ icon='delete' }, shift={ text='INS' },
+      action='delete', shiftAction='insert', repeats=true, bindings=array<table> { plain(KEY_BACKSPACE) } }),
+   key({ id='ac', name='All clear', face='light', primary={ text='AC', font='key' }, action='all_clear',
+      bindings=array<table> { plain(KEY_DELETE) } }),
+
+   key({ id='d4', name='4', face='light', primary={ text='4', font='digit' }, shift={ text='[' },
+      action='digit_4', shiftAction='lbracket', bindings=array<table> { char('4'), plain(KEY_NP_4) } }),
+   key({ id='d5', name='5', face='light', primary={ text='5', font='digit' }, shift={ text=']' },
+      action='digit_5', shiftAction='rbracket', bindings=array<table> { char('5'), plain(KEY_NP_5) } }),
+   key({ id='d6', name='6', face='light', primary={ text='6', font='digit' }, action='digit_6',
+      bindings=array<table> { char('6'), plain(KEY_NP_6) } }),
+   key({ id='multiply', name='Multiply', face='light', primary={ icon='multiply' }, action='multiply',
+      bindings=array<table> { char('*'), plain(KEY_NP_MULTIPLY) } }),
+   key({ id='divide', name='Divide', face='light', primary={ icon='divide' }, shift={ icon='approx' },
+      action='divide', shiftAction='approximate', bindings=array<table> { char('/'), plain(KEY_NP_DIVIDE) } }),
+
+   key({ id='d1', name='1', face='light', primary={ text='1', font='digit' }, shift={ text='r' },
+      action='digit_1', shiftAction='polar_r', bindings=array<table> { char('1'), plain(KEY_NP_1) } }),
+   key({ id='d2', name='2', face='light', primary={ text='2', font='digit' }, shift={ text='θ' },
+      action='digit_2', shiftAction='theta', bindings=array<table> { char('2'), plain(KEY_NP_2) } }),
+   key({ id='d3', name='3', face='light', primary={ text='3', font='digit' }, action='digit_3',
+      bindings=array<table> { char('3'), plain(KEY_NP_3) } }),
+   key({ id='plus', name='Plus', face='light', primary={ icon='plus' }, shift={ text='°′″' },
+      action='plus', shiftAction='dms', bindings=array<table> { char('+'), plain(KEY_NP_PLUS) } }),
+   key({ id='minus', name='Minus', face='light', primary={ icon='minus' }, shift={ text='(−)' },
+      action='minus', shiftAction='negate', bindings=array<table> { char('-'), plain(KEY_NP_MINUS) } }),
+
+   key({ id='d0', name='0', face='light', primary={ text='0', font='digit' }, shift={ icon='clip' },
+      action='digit_0', shiftAction='clip', bindings=array<table> { char('0'), plain(KEY_NP_0) } }),
+   key({ id='point', name='Decimal point', face='light', primary={ text='.', font='digit' }, shift={ icon='paste' },
+      action='point', shiftAction='paste', bindings=array<table> { char('.'), plain(KEY_NP_DOT) } }),
+   key({ id='exp10', name='Times ten to the power', face='light', primary={ icon='exp10' },
+      shift={ icon='capture' }, action='exp10', shiftAction='capture', bindings=array<table> { alt(KEY_P) } }),
+   key({ id='format', name='Format', face='light', primary={ icon='format' }, shift={ icon='format_menu' },
+      action='format', shiftAction='format_menu', bindings=array<table> { alt(KEY_F) } }),
+   key({ id='exe', name='Execute', face='light', primary={ text='EXE', font='key' }, shift={ text='Ans' },
+      action='exe', shiftAction='ans', bindings=array<table> { plain(KEY_ENTER), plain(KEY_NP_ENTER) } })
+}
+
+-- Index keys by ID.
+
+keymap.byID = { }
+for _, k in keymap.keys do keymap.byID[k.id] = k end
+
+-- Return the key descriptor for ID, raising an exception if the key does not exist.
+
+keymap.get = function(ID:str!):table
+   local result = keymap.byID[ID]
+   result ?! raise f'Unknown key "{ID}"'
+   return result
+end
+
+-- Find the key bound to a desktop key event.  Qualifiers is the KQ mask from the keyboard subscription, Code the KEY
+-- value and Unicode the typed character code (0 if none).  Explicit key bindings take precedence over typed
+-- characters.  Returns the key descriptor and the matching binding, or nil.  A desktop Shift key reports its own
+-- qualifier when pressed, so its tap bindings are declared with mods=KQ_SHIFT.
+
+keymap.KQ_MODIFIERS = KQ_ALT | KQ_SHIFT | KQ_CTRL
+
+keymap.lookup = function(Qualifiers:num!, Code:num!, Unicode:num):<table, table>
+   local mods = Qualifiers & keymap.KQ_MODIFIERS
+   for _, k in keymap.keys do
+      for _, b in k.bindings do
+         if b.key and (b.key is Code) then
+            local want = b.mods or 0
+            if want is 0 then
+               if mods is 0 then return k, b end
+            elseif (mods & want) != 0 and (mods & ~want & keymap.KQ_MODIFIERS) is 0 then
+               return k, b
+            end
+         end
+      end
+   end
+
+   if Unicode and (Unicode > 0) and ((mods & (KQ_ALT | KQ_CTRL)) is 0) then
+      local typed = string.char(Unicode)
+      for _, k in keymap.keys do
+         for _, b in k.bindings do
+            if b.char is typed then return k, b end
+         end
+      end
+   end
+end
+
+-- Return the key whose drawn outline contains logical point X, Y, or nil.
+
+keymap.keyAt = function(X:num!, Y:num!):table
+   for _, k in keymap.keys do
+      if layout.pointInKey(k.id, X, Y) then return k end
+   end
+end

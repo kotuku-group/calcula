@@ -1,0 +1,66 @@
+-- $TIRI
+--[[
+The opt-in debug layer.  It draws every key outline exactly as hit testing sees it, key centres and IDs, the fixed
+landmark rectangles from layout.tiri, and a render-time readout.  It is absent in normal runs.
+
+debugview.reference() draws the calibration source image under the debug layer, mapped by the case outline recorded in
+layout.data.source.casePx.  Combined with snapshot mode this produces the calibration audit image.  The source image
+is a local reference only and is never part of the normal shell.
+--]]
+
+   include 'vector', 'image'
+   import './draw', './layout', '../keymap'
+
+   namespace debugview { }
+
+local OUTLINE <const> = '#ff00ff'
+local LANDMARK <const> = '#00e5ff'
+
+local function outline(Layer:obj!, X:num!, Y:num!, W:num!, H:num!, Colour:str!, Round:num)
+   draw.rect(Layer, X, Y, W, H, nil, { stroke=Colour, width=1.5, round=Round })
+end
+
+debugview.build = function(Layer:obj!):table
+   local L = layout.data
+   outline(Layer, 0, 0, L.case.width, L.case.height, LANDMARK, L.case.radius)
+   outline(Layer, L.glass.x, L.glass.y, L.glass.width, L.glass.height, LANDMARK, L.glass.radius)
+   outline(Layer, L.lcdFrame.x, L.lcdFrame.y, L.lcdFrame.width, L.lcdFrame.height, LANDMARK, L.lcdFrame.radius)
+   outline(Layer, L.lcd.x, L.lcd.y, L.lcd.width, L.lcd.height, LANDMARK)
+   for _, m in L.marks do outline(Layer, m.x, m.y, m.width, m.height, LANDMARK) end
+
+   for _, row in L.legendRows do draw.rect(Layer, 60, row.baseline, 760, 1, LANDMARK, { opacity=0.6 }) end
+   for _, y in L.labelRows do draw.rect(Layer, 60, y, 760, 1, LANDMARK, { opacity=0.6 }) end
+
+   local font = { face='Noto Sans', style='Bold' }
+   for _, key in keymap.keys do
+      local g = key.geometry
+      if g.shape.kind is 'pill' then
+         local R = L.rocker
+         local S = g.shape
+         outline(Layer, R.cx - (S.width * 0.5), R.cy - (S.height * 0.5), S.width, S.height, OUTLINE, S.width * 0.5)
+         draw.rect(Layer, R.cx - (S.width * 0.5), R.cy - 0.75, S.width, 1.5, OUTLINE)
+      else
+         draw.circle(Layer, g.cx, g.cy, g.shape.radius, nil, { stroke=OUTLINE, width=1.5 })
+      end
+      draw.rect(Layer, g.cx - 6, g.cy - 0.75, 12, 1.5, OUTLINE)
+      draw.rect(Layer, g.cx - 0.75, g.cy - 6, 1.5, 12, OUTLINE)
+      draw.text(Layer, g.cx, g.y + g.height + 13, key.id, font, 12, OUTLINE, 'middle')
+   end
+
+   local handles = { }
+   handles.timing = draw.text(Layer, 440, 1862, 'render -', font, 12, LANDMARK, 'middle')
+   return handles
+end
+
+-- Draw the calibration source image in Layer at Opacity, mapped so that its case outline fills the view box case.
+
+debugview.reference = function(Layer:obj!, Scene:obj!, Path:str!, Opacity:num!)
+   local src = layout.data.source.casePx
+   local sx = layout.data.view.width / src.width
+   local sy = layout.data.view.height / src.height
+   local pic = Scene.new('image', { src=Path, flags='ForceAlpha32' })
+   local img = Scene.new('VectorImage', { image=pic, aspectRatio=ARF_NONE })
+   check Scene.mtAddDef('calcula_reference', img)
+   local w, h = pic.bitmap.width * sx, pic.bitmap.height * sy
+   draw.rect(Layer, -src.x * sx, -src.y * sy, w, h, 'url(#calcula_reference)', { opacity=Opacity })
+end

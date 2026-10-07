@@ -1,0 +1,170 @@
+#!/usr/bin/env origo
+-- $TIRI
+--[[
+Calcula: a behavioural desktop simulator of a colour graphing calculator, drawn entirely with Kōtuku vectors.
+
+Milestone 0 provides the calibrated shell, the key matrix, pointer and keyboard delivery through a single input path,
+a key-test screen, snapshot mode and a debug landmark overlay.  No mathematics is evaluated yet.
+
+Calcula is an independent project and is not affiliated with or endorsed by Casio.  The 'fidelity' skin reproduces
+product marks for private comparison only; the default 'neutral' skin carries no product marks.
+--]]
+
+   import 'gui', 'gui/window', 'options'
+   import './scripts/ui/layout', './scripts/ui/face', './scripts/ui/host', './scripts/ui/manual'
+   include 'display', 'vector', 'image'
+
+   module display as mGfx
+
+-- One logical unit is 0.1 mm.  At scale 1 the calculator is shown at its physical size on a 96 DPI display.
+
+PX_PER_UNIT <const> = 96 / 254
+MANUAL_PATH <const> = obj.find('self').workingPath .. 'docs/manual.rpl'
+MIN_SCALE   <const> = 0.75
+MAX_SCALE   <const> = 3
+
+   glParser = options({
+      name        = 'Calcula',
+      cmdName     = 'calcula',
+      autoHelp    = false, -- A bare launch opens the calculator; 'help' is declared explicitly below
+      description = [[
+A vector-drawn desktop simulator of a colour graphing calculator.  Milestone 0 shows the calibrated shell and a key
+test screen; calculations are not yet implemented.
+
+Click keys, or use the desktop keyboard: digits and operators type directly, Enter is EXE, arrow keys move, Backspace
+deletes, Delete is AC, Escape is Back, Home is HOME, Tab and Shift+Tab change tabs, Page Up/Down use the rocker.  Alt
+plus S, V, C, T, F and E select Shift, Variable, Catalog, Tools, Format and Settings.  The ? key (F1) opens the help
+manual and the OFF key (Ctrl+Q) closes Calcula.
+]],
+      epilog      = [[
+Examples:
+  origo projects/calcula/calcula.tiri
+  origo projects/calcula/calcula.tiri skin=fidelity scale=1.5
+  origo projects/calcula/calcula.tiri screen=pattern snapshot=shell.png scale=2
+  origo projects/calcula/calcula.tiri debug reference=projects/calcula/reference/fx_cg100_front.png \
+     reference-opacity=1 skin=fidelity snapshot=audit.png scale=2.6
+
+Calcula is an independent project and is not affiliated with or endorsed by Casio.
+]],
+      args        = array<table> {
+         { name = 'scale', type = 'num', default = 1.25,
+           comment = f'Window scale, from {MIN_SCALE} to {MAX_SCALE}.  1 is physical size at 96 DPI.',
+           exec = function(Parser:table, ArgName:str, Value:any!, Param:table)
+              if (Value < MIN_SCALE) or (Value > MAX_SCALE) then
+                 raise f"Parameter '{ArgName}' must be between {MIN_SCALE} and {MAX_SCALE}."
+              end
+           end
+         },
+         { name = 'skin', type = 'enum', default = 'neutral', choices = array<str> { 'neutral', 'fidelity' },
+           comment = 'Shell skin.  The fidelity skin shows product marks and is for private comparison only.' },
+         { name = 'screen', type = 'enum', default = 'keytest', choices = array<str> { 'off', 'pattern', 'keytest' },
+           comment = 'Screen fixture.  \'off\' shows a blank display, as used by the shell goldens.' },
+         { name = 'debug', kind = 'flag', default = false, comment = 'Show the landmark and hit-region overlay.' },
+         { name = 'reference', type = 'file', comment = 'Calibration image to overlay (debug and audit use).' },
+         { name = 'reference-opacity', type = 'num', default = 0.5, comment = 'Opacity of the calibration image.' },
+         { name = 'snapshot', type = 'file', comment = 'Render to this PNG file and exit.' },
+         { name = 'manual', kind = 'flag', default = false, comment = 'Open the help manual at start-up.' },
+         { name = 'help', kind = 'flag', default = false, comment = 'Print this help and exit.' }
+      }
+   })
+
+   glArgs = glParser.process()
+   if glArgs is nil then return end
+   if glArgs.help then
+      glParser.printHelp()
+      return
+   end
+
+   local glWindow:table, glRoot:obj, glFace:table, glTimer
+
+----------------------------------------------------------------------------------------------------------------------
+-- Snapshot mode renders the root viewport to a PNG file.
+
+function saveSnapshot(Path:str!)
+   glWindow.surface.acDraw()
+   bmp = glRoot.buffer
+   bmp ?! raise ERR_Failed, 'The interface buffer is unavailable.'
+   pic = obj.new('image', {
+      width = bmp.width, height = bmp.height, bitsPerPixel = bmp.bitsPerPixel, flags = PCF_NEW
+   })
+   bmp.acCopyData(pic.bitmap)
+   pic.acSaveImage(obj.new('file', { flags=FL_NEW|FL_WRITE, path=Path }))
+   print(f'Saved {bmp.width} x {bmp.height} snapshot to {Path}')
+end
+
+----------------------------------------------------------------------------------------------------------------------
+
+   local view = layout.data.view
+   local px = PX_PER_UNIT * glArgs.scale
+
+   glWindow = gui.window({
+      title        = 'Calcula',
+      icon         = 'tools/calculator',
+      aspectRatio  = true,
+      presence     = SPT_TASKBAR,
+      composite    = true,
+      insideWidth  = math.round(view.width * px),
+      insideHeight = math.round(view.height * px),
+      minWidth     = math.round(view.width * PX_PER_UNIT * MIN_SCALE),
+      maxWidth     = math.round(view.width * PX_PER_UNIT * MAX_SCALE),
+      minHeight    = math.round(view.height * PX_PER_UNIT * MIN_SCALE),
+      maxHeight    = math.round(view.height * PX_PER_UNIT * MAX_SCALE)
+   })
+
+   glWindow.bkgd.fill = '#00000000' -- Transparent background for composition
+
+   -- The root view box scales the canonical coordinate system to the window, letterboxed to preserve the aspect
+   -- ratio.
+
+   glRoot = glWindow.clientViewport({
+      buffered = (glArgs.snapshot != nil), viewWidth = view.width, viewHeight = view.height
+   })
+
+   glFace = face.build(glRoot, glWindow.scene, {
+      skin             = glArgs.skin,
+      fixture          = glArgs.screen,
+      debug            = glArgs.debug,
+      reference        = glArgs.reference,
+      referenceOpacity = glArgs['reference-opacity'],
+      focusRing        = (glArgs.snapshot is nil), -- Snapshots never show the focus ring
+      onRedraw         = function() glWindow.surface.mtScheduleRedraw() end,
+      onCommand        = function(Name:str!)
+         if Name is 'help' then
+            manual.open(MANUAL_PATH, { beside=glWindow.surface })
+         elseif Name is 'close' then
+            mSys.SendMessage(MSGID_QUIT)
+         end
+      end
+   })
+
+   -- The taskbar window is borderless, so dragging and resizing are provided by the face itself.
+
+   if not glArgs.snapshot then
+      host.attach(glRoot, {
+         surface  = glWindow.surface,
+         minWidth = math.round(view.width * PX_PER_UNIT * MIN_SCALE),
+         maxWidth = math.round(view.width * PX_PER_UNIT * MAX_SCALE),
+         onResize = function(Width:num!, Height:num!) glWindow.resizeClientArea(Width, Height) end
+      })
+   end
+
+   glWindow.show()
+
+   if glArgs.manual and (not glArgs.snapshot) then manual.open(MANUAL_PATH, { beside=glWindow.surface }) end
+
+   if glArgs.snapshot then
+      processing.sleep(0.01)
+      saveSnapshot(glArgs.snapshot)
+      return
+   end
+
+   if glArgs.debug then
+      err, glTimer = mSys.SubscribeTimer(1, function(Subscriber, Elapsed, CurrentTime)
+         face.showTiming(glFace, glWindow.scene)
+         glWindow.surface.mtScheduleRedraw()
+      end)
+   end
+
+   processing.sleep()
+
+   if glTimer then mSys.UpdateTimer(glTimer, 0) end

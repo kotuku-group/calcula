@@ -1,0 +1,144 @@
+-- $TIRI
+--[[
+The static shell layer: case, rim, deck, glass panel, LCD frame, product marks, the labels printed above navigation
+keys and the Shift legends printed above scientific and numeric keys.  The shell is constructed once and never
+changes while the application runs.  All geometry comes from layout.tiri and all legend text from keymap.tiri.
+--]]
+
+   include 'vector'
+   import './draw', './icons', './layout', '../keymap'
+
+   namespace shell { }
+
+local function shellDefs(Scene:obj!, Skin:table!)
+   local C = Skin.colours
+   draw.gradient(Scene, 'GradientLinear', 'shell_rim', array<table> {
+      { 0, C.rimOuter }, { 1, C.rimInner }
+   }, { x1=0, y1=0, x2=1, y2=1 })
+   draw.gradient(Scene, 'GradientLinear', 'shell_deck', array<table> {
+      { 0, C.deck }, { 0.7, C.deck }, { 1, C.deckLow }
+   }, { x1=0, y1=0, x2=0, y2=1 })
+end
+
+-- Spread the characters of String evenly over Width units, one character centred in each slot.  Used for widely
+-- tracked marks.  Returns the viewport containing the characters.
+
+local function trackedText(Parent:obj!, X:num!, Baseline:num!, Width:num!, Size:num!, String:str!, Font:table!,
+   Fill:str!, Align:str!):obj
+   local left = X
+   if Align is 'middle' then left = X - (Width * 0.5) elseif Align is 'end' then left = X - Width end
+   local group = Parent.new('VectorViewport', { x=0, y=0, width='100%', height='100%' })
+   local count = #String
+   local slot = Width / count
+   for i in {0 to count} do
+      local ch = String.sub(i, i + 1)
+      if ch != ' ' then
+         draw.text(group, left + (slot * (i + 0.5)), Baseline, ch, Font, Size, Fill, 'middle')
+      end
+   end
+   return group
+end
+
+-- Draw text so that its ink spans Width units: the font is sized from CapHeight and condensed horizontally to fit.
+-- X is the left, centre or right edge according to Align.
+
+local function fitText(Parent:obj!, X:num!, Baseline:num!, Width:num!, CapHeight:num!, String:str!, Font:table!,
+   Fill:str!, Align:str!):obj
+   local size = draw.capSize(CapHeight)
+   if Font.tracked then return trackedText(Parent, X, Baseline, Width, size, String, Font, Fill, Align) end
+   local probe = Parent.new('VectorText', { x=0, y=0, string=String, face=Font.face, fontStyle=Font.style,
+      fontSize=size })
+   local natural = probe.textWidth
+   probe.free()
+   local fitted = { face=Font.face, style=Font.style, condense=(natural > 0) ? (Width / natural) : 1 }
+   return draw.text(Parent, X, Baseline, String, fitted, size, Fill, Align)
+end
+
+local function buildCase(Layer:obj!, Skin:table!)
+   local L = layout.data
+   local K = L.case
+   local C = Skin.colours
+
+   -- Outer edge, sloped rim, highlight ridge, and the deck that carries the keys.
+
+   draw.rect(Layer, 0, 0, K.width, K.height, C.caseEdge, { round=K.radius, stroke=C.caseLine, width=1.5 })
+   draw.rect(Layer, K.edge, K.edge, K.width - (K.edge * 2), K.height - (K.edge * 2), 'url(#shell_rim)',
+      { round=K.radius - K.edge })
+   draw.rect(Layer, K.ridge, K.ridge, K.width - (K.ridge * 2), K.height - (K.ridge * 2), nil,
+      { round=K.radius - K.ridge, stroke=C.rimRidge, width=K.ridgeWidth })
+   draw.rect(Layer, K.rim, K.rim, K.width - (K.rim * 2), K.height - (K.rim * 2), 'url(#shell_deck)',
+      { round=K.deckRadius })
+
+   -- Glass panel with the LCD frame.
+
+   local G = L.glass
+   draw.rect(Layer, G.x - 1.5, G.y - 1.5, G.width + 3, G.height + 3, C.glassEdge, { round=G.radius + 1.5 })
+   draw.rect(Layer, G.x, G.y, G.width, G.height, C.glass, { round=G.radius })
+
+   local F = L.lcdFrame
+   draw.rect(Layer, F.x, F.y, F.width, F.height, nil, { round=F.radius, stroke=C.lcdFrame, width=F.strokeWidth })
+end
+
+local function buildMarks(Layer:obj!, Skin:table!)
+   local M = layout.data.marks
+   local F, C = Skin.fonts, Skin.colours
+   local marks = Skin.marks
+   fitText(Layer, M.brand.x, M.brand.y + M.brand.height, M.brand.width, M.brand.height, marks.brand, F.brand,
+      C.brand, 'start')
+   fitText(Layer, M.model.x + M.model.width, M.model.y + M.model.height, M.model.width, M.model.height, marks.model,
+      F.model, C.model, 'end')
+   fitText(Layer, M.series.x + M.series.width, M.series.y + M.series.height, M.series.width, M.series.height,
+      marks.series, F.series, C.series, 'end')
+end
+
+-- Labels above navigation keys.
+
+local function buildLabels(Layer:obj!, Skin:table!)
+   local L = layout.data
+   local C = Skin.colours
+   for _, key in keymap.keys do
+      if key.label then
+         local g = key.geometry
+         local colour = (key.id is 'shift') ? C.shiftLegend : C.label
+         fitText(Layer, g.cx, L.labelRows[g.row], L.labelWidths[key.id], L.labelCapHeight, key.label,
+            Skin.fonts.label, colour, 'middle')
+      end
+   end
+end
+
+-- Shift (green) legends printed above keys.  Icon legends are drawn in boxes of these sizes.
+
+local LEGEND_ICON = { mixed_fraction=40, nth_root=34, log_base=50, clip=30, paste=28, capture=30, format_menu=28,
+   store=26, angle=22, approx=22 }
+
+local function buildLegends(Layer:obj!, Skin:table!)
+   local L = layout.data
+   local C = Skin.colours
+   local size = draw.capSize(L.legendCapHeight)
+   for _, key in keymap.keys do
+      local g = key.geometry
+      local row = g.legendRow
+      if row then
+         local s = key.shift
+         if s then
+            local x = g.cx + row.shiftDX
+            if s.icon then
+               icons.draw(Layer, s.icon, x, row.baseline - (L.legendCapHeight * 0.5), LEGEND_ICON[s.icon] or 28,
+                  C.shiftLegend)
+            else
+               draw.text(Layer, x, row.baseline, s.text, Skin.fonts.legend, size, C.shiftLegend, 'middle')
+            end
+         end
+      end
+   end
+end
+
+-- Build the shell layer in Layer, registering its gradients with Scene.
+
+shell.build = function(Layer:obj!, Scene:obj!, Skin:table!)
+   shellDefs(Scene, Skin)
+   buildCase(Layer, Skin)
+   buildMarks(Layer, Skin)
+   buildLabels(Layer, Skin)
+   buildLegends(Layer, Skin)
+end

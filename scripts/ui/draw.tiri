@@ -1,0 +1,126 @@
+-- $TIRI
+--[[
+Vector drawing primitives shared by the shell, keys, icons and screen.  Coordinates are expressed in the units of the
+parent viewport.  Opts may define stroke, width (stroke width), opacity, cap, join, dash and round (corner radius for
+rectangles).
+--]]
+
+   include 'vector'
+
+   module vector as mVec
+
+   namespace draw { }
+
+draw.shape = function(Parent:obj!, Class:str!, Fields:table!, Fill:str, Opts:table):obj
+   Fields.fill = Fill or 'none'
+   if Opts then
+      if Opts.stroke then
+         Fields.stroke = Opts.stroke
+         Fields.strokeWidth = Opts.width or 1
+      end
+      if Opts.opacity then Fields.opacity = Opts.opacity end
+      if Opts.cap then Fields.lineCap = Opts.cap end
+      if Opts.join then Fields.lineJoin = Opts.join end
+      if Opts.dash then Fields.dashArray = Opts.dash end
+      if Opts.round then
+         Fields.roundX = Opts.round
+         Fields.roundY = Opts.round
+      end
+      if Opts.name then Fields.name = Opts.name end
+   end
+   return Parent.new(Class, Fields)
+end
+
+draw.rect = function(Parent:obj!, X:num!, Y:num!, W:num!, H:num!, Fill:str, Opts:table):obj
+   return draw.shape(Parent, 'VectorRectangle', { x=X, y=Y, width=W, height=H }, Fill, Opts)
+end
+
+draw.circle = function(Parent:obj!, CX:num!, CY:num!, R:num!, Fill:str, Opts:table):obj
+   return draw.shape(Parent, 'VectorEllipse', { cx=CX, cy=CY, radius=R }, Fill, Opts)
+end
+
+draw.path = function(Parent:obj!, Sequence:str!, Fill:str, Opts:table):obj
+   return draw.shape(Parent, 'VectorPath', { sequence=Sequence }, Fill, Opts)
+end
+
+draw.line = function(Parent:obj!, X1:num!, Y1:num!, X2:num!, Y2:num!, Colour:str!, Width:num!, Cap:str):obj
+   return draw.shape(Parent, 'VectorPath', { sequence=f'M{X1},{Y1} L{X2},{Y2}' }, nil,
+      { stroke=Colour, width=Width, cap=Cap or 'round' })
+end
+
+-- A rounded rectangle path with a different corner radius at the top (RT) and bottom (RB).
+
+draw.roundRectPath = function(X:num!, Y:num!, W:num!, H:num!, RT:num!, RB:num!):str
+   local x2, y2 = X + W, Y + H
+   return f'M{X + RT},{Y} L{x2 - RT},{Y} A{RT},{RT} 0 0 1 {x2},{Y + RT} L{x2},{y2 - RB} ' ..
+      f'A{RB},{RB} 0 0 1 {x2 - RB},{y2} L{X + RB},{y2} A{RB},{RB} 0 0 1 {X},{y2 - RB} L{X},{Y + RT} ' ..
+      f'A{RT},{RT} 0 0 1 {X + RT},{Y} Z'
+end
+
+-- Text is positioned by its baseline.  Font is a skin font table { face, style, condense }; condensing is
+-- applied with a transform because the installed faces have no condensed styles.  Align is 'start', 'middle' or 'end'.
+
+draw.text = function(Parent:obj!, X:num!, Y:num!, String:str!, Font:table!, Size:num!, Fill:str!, Align:str):obj
+   local fields = {
+      x = 0, y = 0, string = String, face = Font.face, fontStyle = Font.style, fontSize = Size, fill = Fill,
+      align = Align or 'start'
+   }
+   local text = Parent.new('VectorText', fields)
+   local _, matrix = text.mtNewMatrix(false)
+   if Font.condense and (Font.condense != 1) then mVec.Scale(matrix, Font.condense, 1) end
+   mVec.Translate(matrix, X, Y)
+   return text
+end
+
+-- Size a font so that its capitals are CapHeight units tall.
+
+local CAP_RATIO <const> = 0.72 -- Cap height of the installed sans faces as a fraction of the em
+
+draw.capSize = function(CapHeight:num!):num
+   return CapHeight / CAP_RATIO
+end
+
+-- Convert '#rrggbb' to floating point components.
+
+draw.rgb = function(Colour:str!):<num, num, num>
+   local hex = Colour.sub(1)
+   return tonumber(hex.sub(0, 2), 16) / 255, tonumber(hex.sub(2, 4), 16) / 255, tonumber(hex.sub(4, 6), 16) / 255
+end
+
+-- Register a gradient with the scene.  Stops are { offset, colour, alpha } tables.  Fields are passed to the gradient
+-- class, e.g. x1, y1, x2, y2 for GradientLinear and cx, cy, radius for radial gradients.  Re-registering an existing
+-- name is ignored.
+
+draw.gradient = function(Scene:obj!, Class:str!, Name:str!, Stops:array<table>!, Fields:table!)
+   local stops = { }
+   for _, stop in Stops do
+      local r, g, b = draw.rgb(stop[1])
+      local vc = struct<GradientStop>
+      vc.offset    = stop[0]
+      vc.rgb.red   = r
+      vc.rgb.green = g
+      vc.rgb.blue  = b
+      vc.rgb.alpha = stop[2] or 1
+      stops.insert(vc)
+   end
+
+   Fields.name  = Name
+   Fields.stops = stops
+   Fields.units ?= 'boundingbox'
+   local grad = Scene.new(Class, Fields)
+   local err = Scene.mtAddDef(Name, grad)
+   if err is ERR_ResourceExists then
+      grad.free()
+   elseif err != ERR_Okay then
+      raise err, f'Failed to register gradient "{Name}"'
+   end
+end
+
+-- Create a viewport with a 100 x 100 view box, centred on CX, CY and Size units wide.  Icons are drawn within it.
+
+draw.iconBox = function(Parent:obj!, CX:num!, CY:num!, Size:num!):obj
+   return Parent.new('VectorViewport', {
+      x = CX - (Size * 0.5), y = CY - (Size * 0.5), width = Size, height = Size,
+      viewX = 0, viewY = 0, viewWidth = 100, viewHeight = 100
+   })
+end

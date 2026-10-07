@@ -1,0 +1,391 @@
+-- $TIRI
+-- Display-free Flute tests for the Calcula key matrix, calibrated layout and input reducer.
+--
+-- Run manually with the Flute runner:
+--   build/agents-install/origo tools/flute.tiri file=projects/calcula/tests/test_calcula_layout.tiri --log-warning
+
+   import 'json'
+   import '../scripts/ui/layout', '../scripts/ui/icons', '../scripts/keymap', '../scripts/app'
+
+KEY_TOLERANCE    <const> = 5   -- 0.5 mm: key centres against the calibration measurements
+SCREEN_TOLERANCE <const> = 2.5 -- 0.25 mm: screen and bezel edges
+TOTAL_KEYS       <const> = 50
+
+global glLandmarks = { }
+
+@BeforeAll function setup(State:table)
+   glLandmarks = json.decode(io.readAll(State.folder .. '../reference/landmarks.json'))
+end
+
+----------------------------------------------------------------------------------------------------------------------
+-- Key matrix integrity
+
+@Test function EveryKeyHasOneDescriptorAndGeometry()
+   assert(#keymap.keys is TOTAL_KEYS, f'Expected {TOTAL_KEYS} keys, found {#keymap.keys}')
+   local seen = { }
+   for _, k in keymap.keys do
+      assert(not seen[k.id], f'Duplicate key ID {k.id}')
+      seen[k.id] = true
+      assert(k.geometry and (k.geometry.id is k.id), f'Key {k.id} has no resolved geometry')
+      assert(k.name and (#k.name > 0), f'Key {k.id} has no accessibility name')
+      assert(k.action, f'Key {k.id} has no action')
+   end
+   for id in layout.data.keys do
+      assert(seen[id], f'Layout key {id} has no keymap descriptor')
+   end
+end
+
+@Test function KeyCentresMatchCalibration()
+   local worst, worst_id = 0, ''
+   for _, k in keymap.keys do
+      local m = glLandmarks.keys[k.geometry.measured]
+      local in_rocker = (k.geometry.shapeName is 'rocker')
+      assert(m or in_rocker, f'Key {k.id} has no calibration measurement')
+      if m then -- The page rocker halves are checked against the rocker landmark below
+         local g = k.geometry
+         local err = math.sqrt(((g.cx - m.cx) ** 2) + ((g.cy - m.cy) ** 2))
+         if err > worst then worst, worst_id = err, k.id end
+         assert(err <= KEY_TOLERANCE, f'Key {k.id} centre is {err} units from its measurement')
+         local r = g.shape.radius
+         assert(math.abs(r - ((m.rx + m.ry) * 0.5)) <= 2, f'Key {k.id} radius {r} differs from measured ' ..
+            f'{m.rx} x {m.ry}')
+      end
+   end
+   assert(worst <= 1.5, f'Grid fit error {worst} at {worst_id} exceeds 1.5 units')
+
+   local rocker = glLandmarks.fixed.rocker
+   local R = layout.data.rocker
+   assert(math.abs(R.cx - (rocker.x + (rocker.width * 0.5))) <= KEY_TOLERANCE, 'Rocker centre X is off')
+   assert(math.abs(R.cy - (rocker.y + (rocker.height * 0.5))) <= KEY_TOLERANCE, 'Rocker centre Y is off')
+end
+
+-- The LCD and its frame are deliberately extended upward, so their top edges are checked against the recorded
+-- calibration instead of the measurement; the other edges must still match the reference.
+
+@Test function ScreenAndBezelEdgesMatchCalibration()
+   for _, name in array<str> { 'glass', 'lcd', 'lcdFrame' } do
+      local m = glLandmarks.fixed[(name is 'lcdFrame') ? 'lcd_frame' : name]
+      local r = layout.data[name]
+      local edges = {
+         left = { r.x, m.x }, right = { r.x + r.width, m.x + m.width },
+         top = { r.calibratedTop ?? r.y, m.y }, bottom = { r.y + r.height, m.y + m.height }
+      }
+      for edge, pair in pairs(edges) do
+         assert(math.abs(pair[0] - pair[1]) <= SCREEN_TOLERANCE,
+            f'{name} {edge} edge is {pair[0]}, measured {pair[1]}')
+      end
+   end
+end
+
+@Test function ExtendedScreenKeepsSquarePixels()
+   local lcd, frame = layout.data.lcd, layout.data.lcdFrame
+   local pitch_x, pitch_y = lcd.width / lcd.pixelsX, lcd.height / lcd.pixelsY
+   assert((lcd.pixelsX is 384) and (lcd.pixelsY is 264), f'The LCD grid is {lcd.pixelsX} x {lcd.pixelsY}')
+   assert(math.abs(pitch_x - pitch_y) / pitch_x < 0.001, f'LCD pixels are not square ({pitch_x} x {pitch_y})')
+   assert(lcd.y < lcd.calibratedTop, 'The LCD top has not been raised above the calibration')
+
+   -- The frame keeps its calibrated inset around the active area.
+   local m_lcd, m_frame = glLandmarks.fixed.lcd, glLandmarks.fixed.lcd_frame
+   assert(math.abs((lcd.y - frame.y) - (m_lcd.y - m_frame.y)) <= SCREEN_TOLERANCE, 'The LCD frame top inset changed')
+end
+
+@Test function MarksClearTheExtendedScreen()
+   local glass, frame, M = layout.data.glass, layout.data.lcdFrame, layout.data.marks
+   for _, name in array<str> { 'brand', 'model' } do
+      local r = M[name]
+      assert(r.y >= glass.y + 20, f'Mark {name} is too close to the top of the glass')
+      assert(r.y + r.height <= frame.y - 20, f'Mark {name} is too close to the LCD frame')
+   end
+   assert(M.series.y >= frame.y + frame.height + 20, 'The series mark is too close to the LCD frame')
+   assert(M.series.y + M.series.height <= glass.y + glass.height, 'The series mark leaves the glass')
+end
+
+@Test function CaseMatchesPublishedDimensions()
+   local c = layout.data.case
+   assert((c.width is 880) and (c.height is 1875), 'The case must be 88 x 187.5 mm at 10 units per mm')
+   assert(math.abs(glLandmarks.scale.aspect_error) < 0.005, 'The reference image is not close to orthographic')
+end
+
+@Test function KeysDoNotOverlapAndSitOnTheDeck()
+   local inset = layout.data.case.rim
+   local keys = keymap.keys
+   for i, a in keys do
+      local ga = a.geometry
+      assert((ga.x >= inset) and (ga.x + ga.width <= 880 - inset), f'Key {a.id} leaves the deck horizontally')
+      assert((ga.y >= layout.data.glass.y + layout.data.glass.height) and (ga.y + ga.height <= 1875 - inset),
+         f'Key {a.id} leaves the deck vertically')
+      for j in {i + 1 to #keys} do
+         local gb = keys[j].geometry
+         local e = 0.01 -- The rocker halves share an edge
+         local overlap = (ga.x + e < gb.x + gb.width) and (gb.x + e < ga.x + ga.width) and
+            (ga.y + e < gb.y + gb.height) and (gb.y + e < ga.y + ga.height)
+         assert(not overlap, f'Hit regions of {a.id} and {keys[j].id} overlap')
+      end
+   end
+end
+
+@Test function KeySpacingIsUniform()
+   for _, grid in array<str> { 'small', 'large' } do
+      local cols = layout.data.columns[grid]
+      local pitches = array<double>
+      for i in {1 to #cols} do pitches.push(cols[i] - cols[i - 1]) end
+      local lo, hi = pitches[0], pitches[0]
+      for _, p in pitches do lo, hi = math.min(lo, p), math.max(hi, p) end
+      assert(hi - lo <= 1.0, f'{grid} column pitch varies by {hi - lo} units')
+   end
+   local R = layout.data.rows
+   local num = array<double> { R.num1, R.num2, R.num3, R.num4 }
+   for i in {1 to 4} do
+      assert(math.abs((num[i] - num[i - 1]) - (num[1] - num[0])) <= 1.0, 'Number deck row pitch is uneven')
+   end
+end
+
+@Test function HitTestFollowsDrawnOutline()
+   for _, k in keymap.keys do
+      local g = k.geometry
+      assert(keymap.keyAt(g.cx, g.cy).id is k.id, f'Centre of {k.id} does not hit {k.id}')
+      if g.shape.kind is 'round' then
+         local r = g.shape.radius
+         assert(keymap.keyAt(g.cx + (r * 0.95), g.cy).id is k.id, f'Inside edge of {k.id} missed')
+         assert(not keymap.keyAt(g.x + 1, g.y + 1), f'Bounding box corner of {k.id} hit a key')
+         assert(not keymap.keyAt(g.cx, g.cy - r - 0.5), f'Point above the outline of {k.id} hit a key')
+      end
+   end
+   local up, down = layout.keyGeometry('page_up'), layout.keyGeometry('page_down')
+   assert(keymap.keyAt(up.cx, up.y + up.height - 1).id is 'page_up', 'Lower edge of page_up missed')
+   assert(keymap.keyAt(down.cx, down.y + 1).id is 'page_down', 'Upper edge of page_down missed')
+   assert(not keymap.keyAt(up.x + 1, up.y + 1), 'The rounded top corner of the rocker was hit')
+end
+
+@Test function LayoutIsReadOnly()
+   try
+      layout.data.case.radius = 1
+   success
+      assert(false, 'Assigning to a layout table did not raise an exception')
+   end
+   assert(layout.data.case.radius is 112, 'Layout data changed after a rejected assignment')
+end
+
+----------------------------------------------------------------------------------------------------------------------
+-- Legends and bindings
+
+-- Calcula has no Alpha key: letters and the Alpha functions come from the desktop keyboard.  The ALPHA and ON
+-- positions hold HELP and OFF, and AC has no Shift+AC OFF function.
+
+@Test function DesktopKeysReplaceAlphaAndPower()
+   for _, k in keymap.keys do
+      assert(k.alpha is nil, f'Key {k.id} still carries an Alpha legend')
+      assert(k.alphaAction is nil, f'Key {k.id} still has an Alpha action')
+      assert(k.face != 'alpha', f'Key {k.id} still uses the Alpha face')
+      assert((k.action != 'power_on') and (k.shiftAction != 'power_off'), f'Key {k.id} still controls power')
+      assert(not (k.shift and k.shift.badge), f'Key {k.id} still has a badge legend')
+   end
+   assert(keymap.byID.alpha is nil, 'The Alpha key must not exist')
+   assert(keymap.byID.on is nil, 'The ON key must not exist')
+
+   local help, off = keymap.get('help'), keymap.get('off')
+   assert((help.action is 'help') and (help.primary.text is '?') and (help.label is 'HELP'), 'HELP key is wrong')
+   assert((off.action is 'close') and (off.primary.text is 'OFF'), 'OFF key is wrong')
+   assert(keymap.get('ac').shiftAction is nil, 'AC must not have a Shift function')
+   assert(keymap.lookup(0, KEY_F1, 0).id is 'help', 'F1 should map to HELP')
+   assert(keymap.lookup(KQ_L_CTRL, KEY_Q, 0).id is 'off', 'Ctrl+Q should map to OFF')
+   assert(keymap.lookup(KQ_L_ALT, KEY_A, 0) is nil, 'Alt+A must no longer select Alpha')
+end
+
+@Test function EveryIconExists()
+   for _, k in keymap.keys do
+      for _, legend in array<any> { k.primary, k.shift } do
+         if legend and legend.icon then
+            assert(icons.exists(legend.icon), f'Key {k.id} uses unknown icon {legend.icon}')
+         end
+      end
+   end
+end
+
+@Test function BindingsAreUnambiguous()
+   local seen = { }
+   for _, k in keymap.keys do
+      for _, b in k.bindings do
+         local sig = b.char and f'char:{b.char}' or f'key:{b.key}:{b.mods or 0}'
+         assert(not seen[sig], f'Binding {sig} is used by {seen[sig]} and {k.id}')
+         seen[sig] = k.id
+      end
+   end
+end
+
+@Test function KeyboardLookupResolvesBindings()
+   assert(keymap.lookup(0, KEY_ENTER, 13).id is 'exe', 'Enter should map to EXE')
+   assert(keymap.lookup(0, KEY_TAB, 9).id is 'tab_next', 'Tab should map to the next tab')
+   assert(keymap.lookup(KQ_L_SHIFT, KEY_TAB, 9).id is 'tab_prev', 'Shift+Tab should map to the previous tab')
+   assert(keymap.lookup(KQ_L_ALT, KEY_S, 0).id is 'shift', 'Alt+S should map to Shift')
+   assert(keymap.lookup(0, KEY_S, 115) is nil, 'A plain letter must remain free for typing')
+   assert(keymap.lookup(KQ_L_SHIFT, KEY_EQUALS, 43).id is 'plus', 'A typed + should map to the plus key')
+   assert(keymap.lookup(0, KEY_SEVEN, 55).id is 'd7', 'A typed 7 should map to the 7 key')
+   assert(keymap.lookup(KQ_L_CTRL, KEY_SEVEN, 55) is nil, 'Ctrl+7 must not type a digit')
+
+   -- The keypad is bound by key code, so it works with Num Lock off (no typed character) as well as on.
+
+   local pad = { [KEY_NP_0]='d0', [KEY_NP_1]='d1', [KEY_NP_2]='d2', [KEY_NP_3]='d3', [KEY_NP_4]='d4',
+      [KEY_NP_5]='d5', [KEY_NP_6]='d6', [KEY_NP_7]='d7', [KEY_NP_8]='d8', [KEY_NP_9]='d9', [KEY_NP_DOT]='point',
+      [KEY_NP_PLUS]='plus', [KEY_NP_MINUS]='minus', [KEY_NP_MULTIPLY]='multiply', [KEY_NP_DIVIDE]='divide',
+      [KEY_NP_ENTER]='exe' }
+   for code, id in pad do
+      local off = keymap.lookup(KQ_NUM_PAD, code, 0)
+      assert(off and (off.id is id), f'Keypad code {code} with Num Lock off should map to {id}')
+      local on = keymap.lookup(KQ_NUM_PAD, code, 48)
+      assert(on and (on.id is id), f'Keypad code {code} with Num Lock on should map to {id}')
+   end
+end
+
+----------------------------------------------------------------------------------------------------------------------
+-- Reducer and input unification
+
+local function newCtl():<table, table>
+   local visuals = { }
+   local ctl = app.new({ keyVisual = function(Key:table!, Down:bool!) visuals[Key.id] = Down end })
+   return ctl, visuals
+end
+
+local function tap(Ctl:table!, ID:str!, Source:str!)
+   app.pressKey(Ctl, ID, Source)
+   app.releaseKey(Ctl, ID, Source)
+end
+
+@Test function ShiftModifier()
+   local ctl = newCtl()
+   tap(ctl, 'shift', 'pointer')
+   assert(ctl.state.modifier is 'shift', 'Shift should arm the shift modifier')
+   tap(ctl, 'sin', 'pointer')
+   assert(ctl.state.lastAction is 'asin', 'Shift+sin should resolve to asin')
+   assert(ctl.state.modifier is 'none', 'Shift is one-shot')
+
+   tap(ctl, 'shift', 'pointer')
+   tap(ctl, 'format', 'pointer')
+   assert(ctl.state.lastAction is 'format_menu', 'Shift+Format should resolve to the Format menu')
+
+   -- Ans is Shift+EXE, and the approximate result moved from EXE to divide.
+   tap(ctl, 'shift', 'pointer')
+   tap(ctl, 'exe', 'pointer')
+   assert(ctl.state.lastAction is 'ans', 'Shift+EXE should resolve to Ans')
+   tap(ctl, 'shift', 'pointer')
+   tap(ctl, 'divide', 'pointer')
+   assert(ctl.state.lastAction is 'approximate', 'Shift+divide should resolve to the approximate result')
+   assert(keymap.get('exe').shift.text is 'Ans', 'EXE must show the Ans legend')
+   assert(keymap.get('divide').shift.icon is 'approx', 'Divide must show the approximate legend')
+
+   tap(ctl, 'shift', 'pointer')
+   tap(ctl, 'shift', 'pointer')
+   assert(ctl.state.modifier is 'none', 'A second Shift cancels the first')
+end
+
+-- A desktop Shift key is a tap binding: the SHIFT key is held while the desktop key is held and commits on release,
+-- unless another key commits while it is held.
+
+@Test function DesktopShiftIsATapKey()
+   for _, code in array<int> { KEY_L_SHIFT, KEY_R_SHIFT } do
+      local k, binding = keymap.lookup(KQ_L_SHIFT, code, 0)
+      assert(k and (k.id is 'shift') and binding.tap, f'Desktop Shift {code} should be a tap binding for SHIFT')
+   end
+   assert(keymap.lookup(KQ_L_CTRL | KQ_L_SHIFT, KEY_L_SHIFT, 0) is nil, 'Ctrl+Shift must not hold SHIFT')
+
+   local ctl, visuals = newCtl()
+   app.pressKey(ctl, 'shift', 'keyboard', false, true)
+   assert(visuals.shift is true, 'A held tap key should be shown down')
+   assert(ctl.state.commits is 0, 'A tap key must not commit when pressed')
+   app.releaseKey(ctl, 'shift', 'keyboard')
+   assert(visuals.shift is false, 'A released tap key should be shown up')
+   assert(ctl.state.modifier is 'shift', 'An unbroken tap should arm the shift modifier')
+
+   app.pressKey(ctl, 'shift', 'keyboard', false, true)
+   app.releaseKey(ctl, 'shift', 'keyboard')
+   assert(ctl.state.modifier is 'none', 'A second tap cancels the first')
+
+   -- A keyboard or pointer commit while the tap key is held breaks the tap.
+
+   for _, source in array<str> { 'keyboard', 'pointer' } do
+      app.pressKey(ctl, 'shift', 'keyboard', false, true)
+      tap(ctl, 'd7', source)
+      app.releaseKey(ctl, 'shift', 'keyboard')
+      assert(ctl.state.lastAction is 'digit_7', f'A {source} key under a held tap should not be shifted')
+      assert(ctl.state.modifier is 'none', f'A {source} chord must not arm the shift modifier')
+      assert(visuals.shift is false, f'The tap key stayed down after a {source} chord')
+   end
+
+   app.pressKey(ctl, 'shift', 'keyboard', false, true)
+   app.cancelKey(ctl, 'shift', 'keyboard')
+   assert((visuals.shift is false) and (ctl.state.modifier is 'none'), 'A cancelled tap must not commit')
+end
+
+-- HELP and OFF are application commands: the reducer reports them as command effects for the host, never as
+-- calculator semantics.  A pending Shift does not change them, and Shift+AC is an ordinary AC.
+
+@Test function HelpAndOffAreCommands()
+   local function effectsOf(Ctl:table!, ID:str!):array<table>
+      local captured = array<table>
+      Ctl.hooks.changed = function(State:table!, Effects:array<table>!) captured = Effects end
+      tap(Ctl, ID, 'pointer')
+      return captured
+   end
+   local function hasEffect(Effects:array<table>!, Kind:str!, Name:str!):bool
+      for _, e in Effects do
+         if (e[0] is Kind) and (e[1] is Name) then return true end
+      end
+      return false
+   end
+
+   local ctl = newCtl()
+   local effects = effectsOf(ctl, 'help')
+   assert(hasEffect(effects, 'command', 'help'), 'HELP must be a command')
+   assert(not hasEffect(effects, 'semantic', 'help'), 'HELP must not reach the calculator')
+   effects = effectsOf(ctl, 'off')
+   assert(hasEffect(effects, 'command', 'close'), 'OFF must request that the window closes')
+
+   tap(ctl, 'shift', 'pointer')
+   effects = effectsOf(ctl, 'help')
+   assert(hasEffect(effects, 'command', 'help') and (ctl.state.modifier is 'none'), 'Shift+HELP must open help')
+   tap(ctl, 'shift', 'pointer')
+   effects = effectsOf(ctl, 'ac')
+   assert(hasEffect(effects, 'semantic', 'all_clear'), 'Shift+AC must behave as AC')
+   assert(ctl.state.power is nil, 'The controller must not track a power state')
+end
+
+@Test function PointerReleaseOutsideCancels()
+   local ctl, visuals = newCtl()
+   app.pressKey(ctl, 'd5', 'pointer')
+   assert(visuals.d5 is true, 'A pointer press should depress the key')
+   assert(ctl.state.commits is 0, 'A pointer press commits on release, not on press')
+   app.cancelKey(ctl, 'd5', 'pointer')
+   assert(visuals.d5 is false, 'Cancelling should raise the key')
+   assert(ctl.state.commits is 0, 'A cancelled press must not commit')
+   assert(#ctl.trace is 0, 'A cancelled press must not be traced')
+end
+
+@Test function RepeatPolicy()
+   local ctl = newCtl()
+   app.pressKey(ctl, 'left', 'keyboard')
+   app.pressKey(ctl, 'left', 'keyboard', true)
+   app.pressKey(ctl, 'left', 'keyboard', true)
+   app.releaseKey(ctl, 'left', 'keyboard')
+   assert(ctl.state.commits is 3, f'Cursor keys repeat: expected 3 commits, got {ctl.state.commits}')
+
+   app.pressKey(ctl, 'd1', 'keyboard')
+   app.pressKey(ctl, 'd1', 'keyboard', true)
+   app.releaseKey(ctl, 'd1', 'keyboard')
+   assert(ctl.state.commits is 4, 'Digit keys must not repeat')
+end
+
+@Test function PointerAndKeyboardProduceTheSameActions()
+   local sequence = array<str> { 'd1', 'plus', 'shift', 'd7', 'lparen', 'exe', 'shift', 'point', 'help', 'off' }
+   local function actions(Source:str!):array<str>
+      local ctl = newCtl()
+      for _, id in sequence do tap(ctl, id, Source) end
+      local result = array<str>
+      for _, line in ctl.trace do result.push(line.sub(line.find(':'))) end
+      return result
+   end
+   local by_pointer, by_keyboard = actions('pointer'), actions('keyboard')
+   assert(#by_pointer is #sequence, 'Every pointer tap should commit once')
+   for i, line in by_pointer do
+      assert(line is by_keyboard[i], f'Action {i} differs: {line} versus {by_keyboard[i]}')
+   end
+end

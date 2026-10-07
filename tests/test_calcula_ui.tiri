@@ -1,0 +1,439 @@
+-- $TIRI
+-- Flute tests for the Calcula vector face: rendering at several scales, pointer hit delivery through the hit layer,
+-- keyboard delivery through the root viewport, window dragging and resizing, and deterministic snapshots.  Pointer
+-- input is injected through the SystemPointer and keys are broadcast as keypress events, so the real scene input
+-- paths are exercised.
+--
+-- Run manually with the Flute runner:
+--   build/agents-install/origo tools/flute.tiri file=projects/calcula/tests/test_calcula_ui.tiri \
+--      --gfx-driver=headless --log-warning
+
+   include 'display', 'vector', 'image'
+   import '../scripts/ui/face', '../scripts/ui/layout', '../scripts/ui/host', '../scripts/ui/manual'
+   import '../scripts/keymap'
+
+PX_PER_UNIT <const> = 96 / 254 -- Scale 1 is physical size at 96 DPI, as in calcula.tiri
+SCALES = array<double> { 1, 1.5, 2, 3 }
+
+global glLive = { } -- Surfaces created by the current test, freed after it even if it fails
+global glFolder = '' -- Folder of this test file
+
+@BeforeAll function setup(State:table)
+   glFolder = State.folder
+end
+
+@AfterEach function cleanup()
+   manual.close()
+   for surface in pairs(glLive) do
+      if surface.exists() then surface.free() end
+   end
+   glLive = { }
+end
+
+----------------------------------------------------------------------------------------------------------------------
+-- Input injection
+
+-- Write the little-endian IEEE-754 encoding of a non-negative double into Buffer at Offset.
+
+local function putDouble(Buffer:array<byte>!, Offset:num!, Value:num!)
+   if Value is 0 then return end
+   local mantissa, exponent = math.frexp(Value)
+   local fraction = ((mantissa * 2) - 1) * 1048576
+   local high = ((exponent + 1022) * 1048576) + math.floor(fraction)
+   local low = (fraction - math.floor(fraction)) * 4294967296
+   for i in {0 to 4} do
+      Buffer[Offset + i] = math.floor(low / (256 ** i)) % 256
+      Buffer[Offset + 4 + i] = math.floor(high / (256 ** i)) % 256
+   end
+end
+
+-- Feed one dcDeviceInput record: { double Values[2]; int64 Timestamp; OBJECTID DeviceID; JTYPE Flags; JET Type }.
+
+local function feed(Type:num!, Value0:num!, Value1:num!)
+   local input = array<byte, 40>
+   putDouble(input, 0, Value0)
+   putDouble(input, 8, Value1)
+   input[32] = Type
+   check obj.find('SystemPointer').acDataFeed(nil, DATA_DEVICE_INPUT, input)
+   processing.sleep(0)
+end
+
+-- Broadcast a key event in the form of an evKey record: { int64 EventID; KQ Qualifiers; KEY Code; int Unicode }.
+-- Phase is KQ_PRESSED or KQ_RELEASED.
+
+local function sendKeyPhase(Code:num!, Qualifiers:num!, Phase:num!, Unicode:num)
+   local ev = array<int, 6>
+   ev[0] = ('keypress').hash()
+   ev[1] = (EVG_IO << 24) | (('keyboard').hash() & 0xffffff)
+   ev[2] = Qualifiers | Phase
+   ev[3] = Code
+   ev[4] = Unicode or 0
+   check mSys.BroadcastEvent(ev, 24)
+   processing.sleep(0)
+end
+
+local function sendKey(Code:num!, Qualifiers:num!, Unicode:num)
+   sendKeyPhase(Code, Qualifiers, KQ_PRESSED, Unicode)
+   sendKeyPhase(Code, Qualifiers, KQ_RELEASED, Unicode)
+end
+
+----------------------------------------------------------------------------------------------------------------------
+-- Build the face in a surface sized for Scale.  Returns a fixture table with the surface, root viewport, face and
+-- the logical-to-display mapping.
+
+local function newFace(Scale:num!, Options:table):table
+   local w = math.round(880 * PX_PER_UNIT * Scale)
+   local h = math.round(1875 * PX_PER_UNIT * Scale)
+   local surface = obj.new('Surface', { x=0, y=0, width=w, height=h })
+   glLive[surface] = true
+   local scene = surface.new('VectorScene', { surface=surface })
+   local root = scene.new('VectorViewport', { x=0, y=0, width=w, height=h, viewX=0, viewY=0, viewWidth=880,
+      viewHeight=1875, aspectRatio='XMid|YMid|Meet', buffered=true })
+   Options ?= { }
+   local fixture = { surface=surface, scene=scene, root=root, width=w, height=h, trace=array<str>,
+      commands=array<str> }
+   Options.trace = function(Line:str!) fixture.trace.push(Line) end
+   Options.onCommand = function(Name:str!) fixture.commands.push(Name) end
+   fixture.face = face.build(root, scene, Options)
+
+   local k = math.min(w / 880, h / 1875)
+   fixture.k, fixture.ox, fixture.oy = k, (w - (880 * k)) * 0.5, (h - (1875 * k)) * 0.5
+
+   surface.acShow()
+   surface.acDraw()
+   processing.sleep(0)
+   return fixture
+end
+
+local function freeFace(Fixture:table!)
+   glLive[Fixture.surface] = nil
+   Fixture.surface.free()
+end
+
+local function toDisplay(Fixture:table!, X:num!, Y:num!):<num, num>
+   return Fixture.ox + (X * Fixture.k), Fixture.oy + (Y * Fixture.k)
+end
+
+local function click(Fixture:table!, X:num!, Y:num!)
+   local dx, dy = toDisplay(Fixture, X, Y)
+   feed(JET_ABS_XY, dx, dy)
+   feed(JET_LMB, 1, 0)
+   feed(JET_LMB, 0, 0)
+end
+
+local function lastKey(Fixture:table!):str
+   if #Fixture.trace is 0 then return '' end
+   local line = Fixture.trace[#Fixture.trace - 1]
+   local first = line.find(':')
+   local second = line.find(':', first + 1)
+   return line.sub(first + 1, second)
+end
+
+local function saveBuffer(Fixture:table!, Path:str!):<num, num>
+   Fixture.surface.acDraw()
+   local bmp = Fixture.root.buffer
+   local pic = obj.new('image', { width=bmp.width, height=bmp.height, bitsPerPixel=bmp.bitsPerPixel, flags=PCF_NEW })
+   bmp.acCopyData(pic.bitmap)
+   pic.acSaveImage(obj.new('file', { flags=FL_NEW|FL_WRITE, path=Path }))
+   return bmp.width, bmp.height
+end
+
+----------------------------------------------------------------------------------------------------------------------
+
+@Test @Requires(display) function ShellRendersAtFourScales()
+   for _, scale in SCALES do
+      for _, skin in array<str> { 'neutral', 'fidelity' } do
+         local f = newFace(scale, { skin=skin, debug=true })
+         local w, h = saveBuffer(f, f'temp:calcula_scale_{skin}_{scale}.png')
+         assert((w is f.width) and (h is f.height),
+            f'Scale {scale} rendered {w} x {h}, expected {f.width} x {f.height}')
+         freeFace(f)
+         mSys.DeleteFile(f'temp:calcula_scale_{skin}_{scale}.png')
+      end
+   end
+end
+
+@Test @Requires(display) function EveryKeyCentreDeliversToItsKey()
+   for _, scale in SCALES do
+      local f = newFace(scale)
+      for _, key in keymap.keys do
+         local g = key.geometry
+         local before = #f.trace
+         click(f, g.cx, g.cy)
+         assert(#f.trace is before + 1, f'Scale {scale}: clicking {key.id} committed {#f.trace - before} times')
+         assert(lastKey(f) is key.id, f'Scale {scale}: clicking {key.id} committed {lastKey(f)}')
+      end
+      freeFace(f)
+   end
+end
+
+@Test @Requires(display) function HitRegionsMatchDrawnOutlines()
+   local f = newFace(2)
+   for _, key in keymap.keys do
+      local g = key.geometry
+      if g.shape.kind is 'round' then
+         local r = g.shape.radius
+         local before = #f.trace
+         click(f, g.cx - (r * 0.85), g.cy) -- Inside the outline near its left edge
+         assert(lastKey(f) is key.id and (#f.trace is before + 1), f'Inner edge of {key.id} was not delivered')
+
+         before = #f.trace
+         click(f, g.x + 2, g.y + 2) -- Inside the bounding box but outside the round outline
+         assert(#f.trace is before, f'A click outside the outline of {key.id} committed {lastKey(f)}')
+      end
+   end
+   freeFace(f)
+end
+
+@Test @Requires(display) function PointerReleaseOutsideCancels()
+   local f = newFace(1.5)
+   local a, b = layout.keyGeometry('d5'), layout.keyGeometry('d6')
+   local ax, ay = toDisplay(f, a.cx, a.cy)
+   local bx, by = toDisplay(f, b.cx, b.cy)
+   feed(JET_ABS_XY, ax, ay)
+   feed(JET_LMB, 1, 0)
+   local visual = f.face.visuals.d5
+   assert(visual.cap.y > a.y, 'The pressed key cap did not move down')
+   feed(JET_ABS_XY, bx, by)
+   feed(JET_LMB, 0, 0)
+   assert(#f.trace is 0, f'Releasing outside the key committed {lastKey(f)}')
+   assert(visual.cap.y is a.y, 'The key cap did not return after the cancelled press')
+
+   click(f, a.cx, a.cy)
+   assert(lastKey(f) is 'd5', 'Pointer input stopped working after a cancelled press')
+   freeFace(f)
+end
+
+@Test @Requires(display) function KeyboardReachesTheCalculator()
+   local f = newFace(1.5)
+   f.surface.acFocus()
+   processing.sleep(0)
+
+   sendKey(KEY_SEVEN, 0, 55)
+   assert(f.trace[0] is 'keyboard:d7:digit_7', f'Typing 7 produced {f.trace[0]}')
+   sendKey(KEY_S, KQ_L_ALT, 0)
+   sendKey(KEY_SEVEN, 0, 55)
+   assert(f.trace[2] is 'keyboard:d7:pi', f'Alt+S then 7 produced {f.trace[2]}')
+   sendKey(KEY_ENTER, 0, 13)
+   assert(lastKey(f) is 'exe', 'Enter did not reach EXE')
+   sendKey(KEY_S, 0, 115)
+   assert(#f.trace is 4, 'A plain letter must not be consumed by a calculator key')
+
+   -- Numeric keypad, with Num Lock on (typed character) and off (key code only).
+
+   sendKey(KEY_NP_9, KQ_NUM_PAD, 57)
+   assert(lastKey(f) is 'd9', 'Keypad 9 with Num Lock on did not reach the 9 key')
+   sendKey(KEY_NP_4, KQ_NUM_PAD, 0)
+   assert(lastKey(f) is 'd4', 'Keypad 4 with Num Lock off did not reach the 4 key')
+   sendKey(KEY_NP_DIVIDE, KQ_NUM_PAD, 47)
+   assert(lastKey(f) is 'divide', 'Keypad divide did not reach the divide key')
+   sendKey(KEY_NP_ENTER, KQ_NUM_PAD | KQ_NOT_PRINTABLE, 0)
+   assert(lastKey(f) is 'exe', 'Keypad Enter did not reach EXE')
+
+   -- The screen reflects the last commit once deferred updates have run.
+
+   processing.sleep(0)
+   assert(f.face.screen.handles.key.string is 'Execute', 'The key-test screen did not show the last key')
+
+   -- Rebuilding the screen subtree must not break keyboard delivery.
+
+   f.face.fixture = 'pattern'
+   sendKey(KEY_DELETE, 0, 0)
+   processing.sleep(0)
+   assert(f.face.screen.fixture is 'pattern', 'The screen was not rebuilt with the new fixture')
+   sendKey(KEY_EIGHT, 0, 56)
+   assert(lastKey(f) is 'd8', 'Keyboard delivery stopped after the screen was rebuilt')
+   freeFace(f)
+end
+
+-- Holding a desktop Shift key holds the SHIFT cap down.  Released on its own it applies the calculator's Shift, as a
+-- click on the cap would.  Used as a modifier for another key, or interrupted by the loss of focus, it does not.
+
+@Test @Requires(display) function DesktopShiftHoldsTheShiftCap()
+   local f = newFace(1.5)
+   f.surface.acFocus()
+   processing.sleep(0)
+   local v = f.face.visuals.shift
+
+   sendKeyPhase(KEY_L_SHIFT, KQ_L_SHIFT, KQ_PRESSED)
+   assert(v.cap.y > v.y, 'Holding Shift did not depress the SHIFT cap')
+   assert(#f.trace is 0, 'Shift must not commit while it is held')
+   sendKeyPhase(KEY_L_SHIFT, 0, KQ_RELEASED)
+   assert(v.cap.y is v.y, 'Releasing Shift did not raise the SHIFT cap')
+   assert(f.trace[0] is 'keyboard:shift:shift', f'Tapping Shift produced {f.trace[0]}')
+   sendKey(KEY_SEVEN, 0, 55)
+   assert(f.trace[1] is 'keyboard:d7:pi', f'Shift tap then 7 produced {f.trace[1]}')
+
+   -- Typing ( needs the desktop Shift.  The character reaches the calculator without the calculator's Shift.
+
+   sendKeyPhase(KEY_R_SHIFT, KQ_R_SHIFT, KQ_PRESSED)
+   assert(v.cap.y > v.y, 'Holding the right Shift did not depress the SHIFT cap')
+   sendKey(KEY_NINE, KQ_R_SHIFT, 40)
+   assert(f.trace[2] is 'keyboard:lparen:lparen', f'Shift+9 produced {f.trace[2]}')
+   sendKeyPhase(KEY_R_SHIFT, 0, KQ_RELEASED)
+   assert(v.cap.y is v.y, 'Releasing the right Shift did not raise the SHIFT cap')
+   assert(#f.trace is 3, 'A Shift used as a modifier must not also commit')
+   assert(f.face.ctl.state.modifier is 'none', 'A Shift used as a modifier must not arm the calculator Shift')
+
+   -- An unbound key also turns the held Shift into a modifier.
+
+   sendKeyPhase(KEY_L_SHIFT, KQ_L_SHIFT, KQ_PRESSED)
+   sendKey(KEY_A, KQ_L_SHIFT, 65)
+   sendKeyPhase(KEY_L_SHIFT, 0, KQ_RELEASED)
+   assert(#f.trace is 3, 'Shift+A must not commit the calculator Shift')
+
+   -- The release is not received once the focus has moved elsewhere, so the cap must not stay down.
+
+   sendKeyPhase(KEY_L_SHIFT, KQ_L_SHIFT, KQ_PRESSED)
+   assert(v.cap.y > v.y, 'Holding Shift did not depress the SHIFT cap')
+   f.surface.acLostFocus()
+   processing.sleep(0)
+   assert(v.cap.y is v.y, 'Losing the focus left the SHIFT cap down')
+   assert(#f.trace is 3, 'Losing the focus must not commit Shift')
+   freeFace(f)
+end
+
+-- HELP and OFF are application commands.  The face reports them to the host through onCommand() once input
+-- processing has finished, from either pointer or keyboard, and they do not reach the calculator screen.
+
+@Test @Requires(display) function HelpAndOffKeysReachTheHost()
+   local f = newFace(1.5)
+   f.surface.acFocus()
+   processing.sleep(0)
+
+   click(f, layout.keyGeometry('help').cx, layout.keyGeometry('help').cy)
+   processing.sleep(0)
+   assert((#f.commands is 1) and (f.commands[0] is 'help'), f'Clicking ? produced {f.commands.concat(",")}')
+   sendKey(KEY_F1, 0, 0)
+   processing.sleep(0)
+   assert(f.commands.last() is 'help', 'F1 did not request help')
+
+   click(f, layout.keyGeometry('off').cx, layout.keyGeometry('off').cy)
+   processing.sleep(0)
+   assert(f.commands.last() is 'close', 'Clicking OFF did not request that the window closes')
+   sendKey(KEY_Q, KQ_L_CTRL, 0)
+   processing.sleep(0)
+   assert((#f.commands is 4) and (f.commands.last() is 'close'), 'Ctrl+Q did not request that the window closes')
+
+   -- A cancelled press on OFF must not close the window.
+   local g = layout.keyGeometry('off')
+   local x, y = toDisplay(f, g.cx, g.cy)
+   feed(JET_ABS_XY, x, y)
+   feed(JET_LMB, 1, 0)
+   feed(JET_ABS_XY, x + 200, y + 200)
+   feed(JET_LMB, 0, 0)
+   processing.sleep(0)
+   assert(#f.commands is 4, 'Releasing outside OFF closed the window')
+   freeFace(f)
+end
+
+@Test @Requires(display) function ManualOpensOnce()
+   local path = glFolder .. '../docs/manual.rpl'
+   local win = manual.open(path)
+   processing.sleep(0.1)
+   assert(manual.isOpen(), 'The manual window did not open')
+   assert(win.document.pageHeight > win.surface.height, f'The manual page is only {win.document.pageHeight} px high')
+   assert(manual.open(path) is win, 'Opening the manual twice created a second window')
+   manual.close()
+   assert(not manual.isOpen(), 'The manual window did not close')
+
+   -- A manual that cannot be loaded raises, and must not leave a window over the calculator.
+   local failed = false
+   try
+      manual.open(glFolder .. 'no_such_manual.rpl')
+   except
+      failed = true
+   end
+   assert(failed, 'Opening a missing manual did not raise')
+   assert(not manual.isOpen(), 'A failed manual left its window open')
+end
+
+@Test @Requires(display) function SnapshotsAreDeterministic()
+   local paths = array<str> { 'temp:calcula_det_a.png', 'temp:calcula_det_b.png' }
+   for _, path in paths do
+      local f = newFace(2, { skin='fidelity', fixture='pattern' })
+      saveBuffer(f, path)
+      freeFace(f)
+   end
+   local a, b = io.readAll(paths[0]), io.readAll(paths[1])
+   assert(#a > 10000, 'The snapshot is unexpectedly small')
+   assert(a is b, 'Two snapshots of the same face differ')
+   for _, path in paths do mSys.DeleteFile(path) end
+end
+
+-- The host window is borderless, so the face provides dragging and a resize grip (scripts/ui/host.tiri).  The
+-- headless display does not move or resize top-level surfaces, so the tests record the requests that the controls make.
+
+local function attachHost(Fixture:table!, Options:table):<table, table>
+   Options ?= { }
+   local requests = { moves=array<table>, sizes=array<table> }
+   Options.surface = Fixture.surface
+   Options.onMove = function(X:num!, Y:num!) requests.moves.push({ X, Y }) end
+   Options.onResize = function(Width:num!, Height:num!) requests.sizes.push({ Width, Height }) end
+   local handle = host.attach(Fixture.root, Options)
+   Fixture.surface.acDraw() -- Input regions are registered when the scene is drawn
+   processing.sleep(0)
+   return handle, requests
+end
+
+@Test @Requires(display) function DraggingTheFaceMovesTheWindow()
+   local f = newFace(1.5)
+   local _, requests = attachHost(f)
+   local x0, y0 = f.surface.x, f.surface.y
+
+   -- A press on the glass below the LCD, where no key claims the pointer, drags the window.
+   local px, py = toDisplay(f, 300, 690)
+   feed(JET_ABS_XY, px, py)
+   feed(JET_LMB, 1, 0)
+   feed(JET_ABS_XY, px + 30, py + 20)
+   assert(#requests.moves is 1, f'Dragging made {#requests.moves} move requests')
+   local m = requests.moves[0]
+   assert((m[0] is x0 + 30) and (m[1] is y0 + 20), f'Dragging moved the window to {m[0]}, {m[1]}')
+   feed(JET_LMB, 0, 0)
+   feed(JET_ABS_XY, px + 80, py + 80)
+   assert(#requests.moves is 1, 'The window moved after the button was released')
+
+   -- A press on a key belongs to the key: moving away cancels the key and leaves the window in place.
+   local g = layout.keyGeometry('d5')
+   local kx, ky = toDisplay(f, g.cx, g.cy)
+   feed(JET_ABS_XY, kx, ky)
+   feed(JET_LMB, 1, 0)
+   feed(JET_ABS_XY, kx + 150, ky + 150)
+   feed(JET_LMB, 0, 0)
+   assert(#requests.moves is 1, 'Pressing a key dragged the window')
+   assert(#f.trace is 0, f'The cancelled key press committed {lastKey(f)}')
+   freeFace(f)
+end
+
+@Test @Requires(display) function ResizeGripPreservesTheAspectRatio()
+   local f = newFace(1)
+   local min_width, max_width = f.width - 40, f.width + 60
+   local h, requests = attachHost(f, { minWidth=min_width, maxWidth=max_width })
+   assert(h.ridges.visibility is VIS_HIDDEN, 'The grip ridges must be hidden until the pointer is over them')
+
+   local gx, gy = toDisplay(f, 845, 1840)
+   feed(JET_ABS_XY, gx, gy)
+   assert(h.ridges.visibility is VIS_VISIBLE, 'The grip ridges did not appear on hover')
+
+   feed(JET_LMB, 1, 0)
+   feed(JET_ABS_XY, gx + 20, gy + 20)
+   assert(#requests.sizes is 1, f'The grip made {#requests.sizes} resize requests')
+   local size = requests.sizes[0]
+   local expected = math.round(f.width + ((20 + (20 * 880 / 1875)) * 0.5))
+   assert(size[0] is expected, f'The grip requested width {size[0]}, expected {expected}')
+   assert(size[1] is math.round(size[0] * 1875 / 880), f'The grip requested {size[0]} x {size[1]}')
+
+   feed(JET_ABS_XY, gx + 500, gy + 500)
+   local widest = requests.sizes.last()[0]
+   assert(widest is max_width, f'The grip requested {widest} px, beyond the maximum {max_width}')
+   feed(JET_ABS_XY, gx - 500, gy - 500)
+   local narrowest = requests.sizes.last()[0]
+   assert(narrowest is min_width, f'The grip requested {narrowest} px, below the minimum {min_width}')
+   feed(JET_LMB, 0, 0)
+   assert(#requests.moves is 0, 'Resizing must not move the window')
+   assert(#f.trace is 0, 'Using the grip committed a key')
+
+   feed(JET_ABS_XY, gx - 200, gy - 200)
+   assert(h.ridges.visibility is VIS_HIDDEN, 'The grip ridges did not hide after the pointer left')
+   freeFace(f)
+end

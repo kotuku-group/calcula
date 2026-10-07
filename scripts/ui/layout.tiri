@@ -1,0 +1,259 @@
+-- $TIRI
+--[[
+Calibrated canonical geometry of the fx-CG100 front face.
+
+All values are logical units in an 880 x 1875 view box: ten units per millimetre over the published 88 x 187.5 mm
+case.  The figures were measured from Casio's official front render (reference/fx_cg100_front.png) by
+tools/measure_reference.py, which writes the raw landmarks to reference/landmarks.json.  The render is a near
+orthographic view: its case outline matches the published aspect ratio to within 0.18%.  Measured values are marked
+provisional until they are checked against a straight-on scan of a real unit (see the implementation proposal).
+
+Keys are placed on uniform row and column grids fitted to the measured centres; every key centre lies within 1.5
+units (0.15 mm) of its measurement.  Shapes are referenced by name from SHAPES.  Printed legend rows give the
+baseline of capital letters; horizontal legend placement is relative to the key centre.
+
+The tables are frozen: assigning to any of them raises an exception, so geometry can only change by editing this file.
+--]]
+
+   namespace layout { }
+
+----------------------------------------------------------------------------------------------------------------------
+-- Wrap Table and its sub-tables in read-only proxies.  Iteration, length and indexing pass through to the original.
+
+local function freeze(Table:table):table
+   for k, v in pairs(Table) do
+      if type(v) is 'table' then Table[k] = freeze(v) end
+   end
+   return setmetatable({ }, {
+      __index = Table,
+      __newindex = function(Key:any, Value:any) raise f'Layout tables are read-only (assignment to "{Key}")' end,
+      __len = function():num return #Table end,
+      __pairs = function():<func, table, any> return next, Table, nil end,
+      __iter = function():func
+         local key:any
+         return function():<any, any>
+            local value:any
+            key, value = next(Table, key)
+            return key, value
+         end
+      end
+   })
+end
+
+----------------------------------------------------------------------------------------------------------------------
+
+local data = {
+   status = 'provisional', -- 'provisional' until confirmed against a straight-on scan of a real unit
+
+   source = {
+      file   = 'reference/fx_cg100_front.png',
+      sha256 = 'bc46489a20047cdfcd1a1a68c9de12492889759b694e4a70c72927b9817094ff',
+      casePx = { x=569, y=80, width=862, height=1840 } -- Case extents in the source image
+   },
+
+   view = { width=880, height=1875 },
+
+   -- Case and the raised rim that surrounds the face.  The rim is a sloped band between the outer edge and the inner
+   -- deck, with a bright ridge part way down.
+
+   case = { x=0, y=0, width=880, height=1875, radius=112,
+      edge=6, ridge=28, ridgeWidth=5, rim=39, deckRadius=72 },
+
+   -- Black glass panel holding the LCD and the printed marks.
+
+   glass = { x=39.8, y=37.7, width=800.4, height=677.6, radius=56 },
+
+   -- The LCD frame is the thin outline around the display window.  The calibrated left, right and bottom edges are
+   -- kept, but the top is deliberately raised above the reference to make better use of the glass: the active area
+   -- is 384 x 264 square pixels instead of the fx-CG100's 384 x 216.  The pixel pitch (721.8 / 384 units) is
+   -- unchanged.  'calibratedTop' records the measured top edge for the landmark report.
+
+   lcdFrame = { x=71.5, y=125.4, width=738.1, height=516.6, radius=10.2, strokeWidth=2, calibratedTop=216.0 },
+   lcd      = { x=79.6, y=135.6, width=721.8, height=496.2, pixelsX=384, pixelsY=264, calibratedTop=226.2 },
+
+   -- Printed marks.  Rectangles are ink extents; text is positioned on the bottom edge (cap baseline).  The brand and
+   -- model marks are raised 50.2 units above the reference (calibratedY) to clear the extended LCD frame.
+
+   marks = {
+      brand  = { x=99.0, y=68.0, width=169.5, height=31.6, calibratedY=118.2 },  -- CASIO, left aligned
+      model  = { x=651.3, y=68.0, width=129.7, height=20.4, calibratedY=118.2 }, -- fx-CG100, right aligned to x + width
+      series = { x=529.8, y=667.5, width=251.1, height=22.4 }  -- CLASSWIZ CG, right aligned to x + width
+   },
+
+   -- Key outline shapes.  Radii are to the outside of the dark outline ring; 'face' is the inset of the face within
+   -- the ring.
+
+   shapes = {
+      small  = { kind='round', radius=39.8, face=2.6 },
+      large  = { kind='round', radius=51.0, face=3.0 },
+      ok     = { kind='round', radius=42.4, face=2.6 },
+      arrow  = { kind='round', radius=38.0, face=2.6 },
+      rocker = { kind='pill', width=87.8, height=196.7, face=2.6 }
+   },
+
+   -- Uniform grids fitted to the measured centres by least squares.  Small keys share six columns; the number deck
+   -- uses five.  Column pitches vary by up to 1.1 units in the measurements, which is attributed to measurement noise.
+
+   columns = {
+      small = array<double> { 124.57, 250.33, 376.10, 501.86, 627.62, 753.39 }, -- Pitch 125.76
+      large = array<double> { 134.74, 286.68, 438.62, 590.56, 742.50 }          -- Pitch 151.94
+   },
+
+   rows = {
+      nav1 = 802.1, nav2 = 907.8, nav3 = 1034.4,
+      sci1 = 1140.3, sci2 = 1245.9,
+      num1 = 1362.09, num2 = 1488.23, num3 = 1614.37, num4 = 1740.51 -- Pitch 126.14
+   },
+
+   -- The cursor keys sit in a black cross made of five discs joined by bars.  Down is not on the nav3 row.
+
+   dpad = { cx=502.3, cy=907.7, discRadius=53.1, barWidth=31.6, downY=1013.4 },
+
+   rocker = { cx=753.4, cy=855.4 }, -- The page rocker is one pill split into upper and lower halves
+
+   -- Printed legend rows.  'baseline' is the cap baseline in logical units.  Shift (green) legends are centred left of
+   -- the key centre by 'shiftDX'.  The fx-CG100 prints Alpha legends to the right; Calcula has no Alpha key.
+
+   legendRows = {
+      sci1 = { baseline=1100.5, shiftDX=-44 },
+      sci2 = { baseline=1205.5, shiftDX=-44 },
+      num1 = { baseline=1314.5, shiftDX=-47 },
+      num2 = { baseline=1439.9, shiftDX=-47 },
+      num3 = { baseline=1566.2, shiftDX=-47 },
+      num4 = { baseline=1692.6, shiftDX=-47 }
+   },
+
+   -- Labels printed above navigation keys, centred on the key.
+
+   labelRows = { nav1=752.0, nav2=862.1, nav3=985.4 },
+
+   -- Measured ink widths of the printed labels, by key ID.  Labels are condensed to fit.  HELP is not on the fx-CG100;
+   -- its width is HOME's measured width scaled by the two words' natural widths, so both share one condensing.
+
+   labelWidths = { home=50.0, settings=89.8, shift=51.0, help=41.2, variable=86.8, catalog=79.6, tools=55.1 },
+
+   legendCapHeight = 17.3,
+   labelCapHeight  = 18.3,
+
+   -- Key placements: { shape, column grid, column index, row }.  The cursor keys and rocker halves are placed by the
+   -- 'dpad' and 'rocker' entries; their geometry is resolved by layout.keyGeometry().  'off' and 'help' occupy the
+   -- fx-CG100's ON and ALPHA positions; 'measured' names the key under which reference/landmarks.json records them.
+
+   keys = {
+      off      = { shape='small', grid='small', col=0, row='nav1', measured='on' },
+      home     = { shape='small', grid='small', col=1, row='nav1' },
+      tab_prev = { shape='small', grid='small', col=2, row='nav1' },
+      up       = { shape='arrow', place='dpad', dx=0, dy=-105.5 },
+      tab_next = { shape='small', grid='small', col=4, row='nav1' },
+      page_up  = { shape='rocker', place='rocker', half='upper' },
+      settings = { shape='small', grid='small', col=0, row='nav2' },
+      back     = { shape='small', grid='small', col=1, row='nav2' },
+      left     = { shape='arrow', place='dpad', dx=-125.8, dy=0 },
+      ok       = { shape='ok', place='dpad', dx=0, dy=0 },
+      right    = { shape='arrow', place='dpad', dx=125.8, dy=0 },
+      page_down = { shape='rocker', place='rocker', half='lower' },
+      shift    = { shape='small', grid='small', col=0, row='nav3' },
+      help     = { shape='small', grid='small', col=1, row='nav3', measured='alpha' },
+      variable = { shape='small', grid='small', col=2, row='nav3' },
+      down     = { shape='arrow', place='dpad', dx=0, dy=105.7 },
+      catalog  = { shape='small', grid='small', col=4, row='nav3' },
+      tools    = { shape='small', grid='small', col=5, row='nav3' },
+      xtt      = { shape='small', grid='small', col=0, row='sci1' },
+      fraction = { shape='small', grid='small', col=1, row='sci1' },
+      sqrt     = { shape='small', grid='small', col=2, row='sci1' },
+      power    = { shape='small', grid='small', col=3, row='sci1' },
+      square   = { shape='small', grid='small', col=4, row='sci1' },
+      exp      = { shape='small', grid='small', col=5, row='sci1' },
+      comma    = { shape='small', grid='small', col=0, row='sci2' },
+      sin      = { shape='small', grid='small', col=1, row='sci2' },
+      cos      = { shape='small', grid='small', col=2, row='sci2' },
+      tan      = { shape='small', grid='small', col=3, row='sci2' },
+      lparen   = { shape='small', grid='small', col=4, row='sci2' },
+      rparen   = { shape='small', grid='small', col=5, row='sci2' },
+      d7       = { shape='large', grid='large', col=0, row='num1' },
+      d8       = { shape='large', grid='large', col=1, row='num1' },
+      d9       = { shape='large', grid='large', col=2, row='num1' },
+      del      = { shape='large', grid='large', col=3, row='num1' },
+      ac       = { shape='large', grid='large', col=4, row='num1' },
+      d4       = { shape='large', grid='large', col=0, row='num2' },
+      d5       = { shape='large', grid='large', col=1, row='num2' },
+      d6       = { shape='large', grid='large', col=2, row='num2' },
+      multiply = { shape='large', grid='large', col=3, row='num2' },
+      divide   = { shape='large', grid='large', col=4, row='num2' },
+      d1       = { shape='large', grid='large', col=0, row='num3' },
+      d2       = { shape='large', grid='large', col=1, row='num3' },
+      d3       = { shape='large', grid='large', col=2, row='num3' },
+      plus     = { shape='large', grid='large', col=3, row='num3' },
+      minus    = { shape='large', grid='large', col=4, row='num3' },
+      d0       = { shape='large', grid='large', col=0, row='num4' },
+      point    = { shape='large', grid='large', col=1, row='num4' },
+      exp10    = { shape='large', grid='large', col=2, row='num4' },
+      format   = { shape='large', grid='large', col=3, row='num4' },
+      exe      = { shape='large', grid='large', col=4, row='num4' }
+   }
+}
+
+-- Resolve the geometry of key ID.  Returns a table with cx, cy, the bounding box (x, y, width, height), the shape
+-- name and shape table, the legend row (nil for keys without printed legends above them) and the ID of the key's
+-- calibration measurement.
+
+local function resolve(ID:str):table
+   local place = rawget(data.keys, ID)
+   place ?! raise f'Unknown key "{ID}"'
+   local shape = data.shapes[place.shape]
+   local cx:num, cy:num, w:num, h:num
+
+   if place.place is 'dpad' then
+      cx = data.dpad.cx + place.dx
+      cy = (ID is 'down') ? data.dpad.downY : data.dpad.cy + place.dy
+   elseif place.place is 'rocker' then
+      cx = data.rocker.cx
+      cy = data.rocker.cy + (shape.height * ((place.half is 'upper') ? -0.25 : 0.25))
+   else
+      cx = data.columns[place.grid][place.col]
+      cy = data.rows[place.row]
+   end
+
+   if shape.kind is 'pill' then
+      w, h = shape.width, shape.height * 0.5
+   else
+      w, h = shape.radius * 2, shape.radius * 2
+   end
+
+   return {
+      id = ID, cx = cx, cy = cy, x = cx - (w * 0.5), y = cy - (h * 0.5), width = w, height = h,
+      shapeName = place.shape, shape = shape, half = place.half, row = place.row, measured = place.measured or ID,
+      legendRow = place.row and rawget(data.legendRows, place.row)
+   }
+end
+
+local geometry = { }
+for id in pairs(data.keys) do geometry[id] = resolve(id) end
+
+layout.data = freeze(data)
+layout.geometry = freeze(geometry)
+
+-- Return the resolved geometry of a key.  Raises an exception for an unknown key ID.
+
+layout.keyGeometry = function(ID:str!):table
+   return layout.geometry[ID]
+end
+
+-- Report whether logical point X, Y falls inside the drawn outline of key ID.  Used by tests to verify that hit
+-- regions and drawn keys agree.
+
+layout.pointInKey = function(ID:str!, X:num!, Y:num!):bool
+   local g = layout.geometry[ID]
+   if g.shape.kind is 'pill' then
+      local r = g.shape.width * 0.5
+      local top = layout.data.rocker.cy - (g.shape.height * 0.5)
+      local bottom = layout.data.rocker.cy + (g.shape.height * 0.5)
+      if (X < g.x) or (X > g.x + g.width) or (Y < g.y) or (Y > g.y + g.height) then return false end
+      local ccx = g.cx
+      if Y < top + r then return ((X - ccx) ** 2) + ((Y - (top + r)) ** 2) <= r * r end
+      if Y > bottom - r then return ((X - ccx) ** 2) + ((Y - (bottom - r)) ** 2) <= r * r end
+      return true
+   end
+   local r = g.shape.radius
+   return ((X - g.cx) ** 2) + ((Y - g.cy) ** 2) <= r * r
+end

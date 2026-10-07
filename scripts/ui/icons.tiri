@@ -1,0 +1,266 @@
+-- $TIRI
+--[[
+Vector icons for key tops and printed Shift legends.  Every icon is drawn in a 100 x 100 view box created by
+icons.draw(), which centres the box on CX, CY with a side of Size units.  Strokes use the supplied colour; 'Accent' is
+used by icons that combine two inks, such as the cross on the delete key.
+
+Template keys name their arguments with italic serif variables in conventional notation (√x, xʸ, log_y x), instead of
+the filled and outlined slot squares printed on the fx-CG100.
+--]]
+
+   import './draw'
+
+   namespace icons { }
+
+local function stroke(Colour:str!, Width:num!):table
+   return { stroke=Colour, width=Width, cap='round', join='round' }
+end
+
+local function chevron(VP:obj!, Y:num!, Colour:str!, Down:bool)
+   local d = Down ? -1 : 1
+   draw.path(VP, f'M27,{Y + (12 * d)} L50,{Y - (11 * d)} L73,{Y + (12 * d)}', nil, stroke(Colour, 10))
+end
+
+local function arrowHead(VP:obj!, X:num!, Y:num!, DX:num!, Colour:str!, Width:num!)
+   draw.path(VP, f'M{X + (DX * 15)},{Y - 15} L{X},{Y} L{X + (DX * 15)},{Y + 15}', nil, stroke(Colour, Width))
+end
+
+local function italic(VP:obj!, X:num!, Y:num!, String:str!, Size:num!, Colour:str!, Align:str):obj
+   return VP.new('VectorText', {
+      x = X, y = Y, string = String, face = 'Noto Serif', fontStyle = 'Bold Italic', fontSize = Size, fill = Colour,
+      align = Align or 'middle'
+   })
+end
+
+local function sans(VP:obj!, X:num!, Y:num!, String:str!, Size:num!, Colour:str!, Align:str, Style:str):obj
+   return VP.new('VectorText', {
+      x = X, y = Y, string = String, face = 'Noto Sans', fontStyle = Style or 'Bold', fontSize = Size, fill = Colour,
+      align = Align or 'middle'
+   })
+end
+
+local painters = {
+   home = function(VP:obj!, C:str!)
+      draw.path(VP, 'M22,52 L50,26 L78,52 L78,78 L22,78 Z', nil, stroke(C, 8))
+   end,
+
+   tab_prev = function(VP:obj!, C:str!)
+      draw.line(VP, 22, 28, 22, 72, C, 9)
+      draw.line(VP, 36, 50, 80, 50, C, 9)
+      arrowHead(VP, 36, 50, 1, C, 9)
+   end,
+
+   tab_next = function(VP:obj!, C:str!)
+      draw.line(VP, 78, 28, 78, 72, C, 9)
+      draw.line(VP, 20, 50, 64, 50, C, 9)
+      arrowHead(VP, 64, 50, -1, C, 9)
+   end,
+
+   up = function(VP:obj!, C:str!) chevron(VP, 50, C, false) end,
+   down = function(VP:obj!, C:str!) chevron(VP, 50, C, true) end,
+
+   left = function(VP:obj!, C:str!)
+      draw.path(VP, 'M62,27 L38,50 L62,73', nil, stroke(C, 10))
+   end,
+
+   right = function(VP:obj!, C:str!)
+      draw.path(VP, 'M38,27 L62,50 L38,73', nil, stroke(C, 10))
+   end,
+
+   page_up = function(VP:obj!, C:str!)
+      chevron(VP, 40, C, false)
+      chevron(VP, 64, C, false)
+   end,
+
+   page_down = function(VP:obj!, C:str!)
+      chevron(VP, 36, C, true)
+      chevron(VP, 60, C, true)
+   end,
+
+   settings = function(VP:obj!, C:str!)
+      for _, row in array<table> { { 30, 62 }, { 50, 36 }, { 70, 58 } } do
+         draw.line(VP, 22, row[0], 78, row[0], C, 7)
+         draw.rect(VP, row[1] - 6, row[0] - 10, 12, 20, C, { round=3 })
+      end
+   end,
+
+   back = function(VP:obj!, C:str!)
+      draw.path(VP, 'M32,38 L62,38 A18,18 0 0 1 62,74 L40,74', nil, stroke(C, 9))
+      draw.path(VP, 'M44,24 L30,38 L44,52', nil, stroke(C, 9))
+   end,
+
+   shift = function(VP:obj!, C:str!)
+      draw.path(VP, 'M50,14 L82,48 L64,48 L64,86 L36,86 L36,48 L18,48 Z', nil, stroke(C, 5))
+   end,
+
+   variable = function(VP:obj!, C:str!)
+      draw.rect(VP, 40, 24, 46, 52, nil, { stroke=C, width=5, round=6 })
+      italic(VP, 63, 66, 'x', 44, C)
+      draw.line(VP, 12, 50, 32, 50, C, 6)
+      draw.path(VP, 'M20,41 L11,50 L20,59', nil, stroke(C, 6))
+   end,
+
+   catalog = function(VP:obj!, C:str!)
+      draw.path(VP, 'M50,34 C40,26 26,26 16,30 L16,72 C26,68 40,68 50,76 C60,68 74,68 84,72 L84,30 ' ..
+         'C74,26 60,26 50,34 Z', nil, stroke(C, 6))
+      draw.line(VP, 50, 34, 50, 74, C, 6)
+   end,
+
+   tools = function(VP:obj!, C:str!)
+      for _, x in array<double> { 26, 50, 74 } do draw.circle(VP, x, 50, 8, nil, { stroke=C, width=5 }) end
+   end,
+
+   xtt = function(VP:obj!, C:str!)
+      italic(VP, 50, 44, 'x', 70, C)
+      sans(VP, 50, 86, 'θ,T,Y', 39, C)
+   end,
+
+   fraction = function(VP:obj!, C:str!)
+      italic(VP, 50, 39, 'x', 56, C)
+      draw.line(VP, 24, 46, 76, 46, C, 6, 'butt')
+      italic(VP, 50, 86, 'y', 56, C)
+   end,
+
+   sqrt = function(VP:obj!, C:str!)
+      draw.path(VP, 'M14,56 L24,52 L34,78 L48,24 L88,24', nil, stroke(C, 6))
+      italic(VP, 68, 74, 'x', 58, C)
+   end,
+
+   power = function(VP:obj!, C:str!)
+      italic(VP, 38, 76, 'x', 68, C)
+      italic(VP, 74, 44, 'y', 44, C)
+   end,
+
+   square = function(VP:obj!, C:str!)
+      italic(VP, 38, 76, 'x', 68, C)
+      sans(VP, 76, 46, '2', 40, C)
+   end,
+
+   exp = function(VP:obj!, C:str!)
+      italic(VP, 38, 72, 'e', 58, C)
+      italic(VP, 72, 42, 'x', 42, C)
+   end,
+
+   delete = function(VP:obj!, C:str!, Accent:str)
+      draw.path(VP, 'M14,50 L32,26 L84,26 L84,74 L32,74 Z', C, { stroke=C, width=4, join='round' })
+      draw.line(VP, 47, 38, 69, 62, Accent or '#ffffff', 8)
+      draw.line(VP, 69, 38, 47, 62, Accent or '#ffffff', 8)
+   end,
+
+   multiply = function(VP:obj!, C:str!)
+      draw.line(VP, 30, 30, 70, 70, C, 9)
+      draw.line(VP, 70, 30, 30, 70, C, 9)
+   end,
+
+   divide = function(VP:obj!, C:str!)
+      draw.line(VP, 24, 50, 76, 50, C, 8, 'butt')
+      draw.circle(VP, 50, 30, 6, C)
+      draw.circle(VP, 50, 70, 6, C)
+   end,
+
+   plus = function(VP:obj!, C:str!)
+      draw.line(VP, 24, 50, 76, 50, C, 9, 'butt')
+      draw.line(VP, 50, 24, 50, 76, C, 9, 'butt')
+   end,
+
+   minus = function(VP:obj!, C:str!)
+      draw.line(VP, 22, 50, 78, 50, C, 9, 'butt')
+   end,
+
+   exp10 = function(VP:obj!, C:str!)
+      sans(VP, 44, 70, '×10', 46, C, 'middle', 'Regular')
+      italic(VP, 85, 36, 'x', 30, C)
+   end,
+
+   format = function(VP:obj!, C:str!)
+      draw.text(VP, 50, 59, 'FORMAT', { face='Noto Sans', style='Bold', condense=0.74 }, 25, C, 'middle')
+      draw.path(VP, 'M24,32 Q50,14 74,28', nil, stroke(C, 4.5))
+      draw.path(VP, 'M65,22 L76,29 L66,36', nil, stroke(C, 4.5))
+      draw.path(VP, 'M76,68 Q50,86 26,72', nil, stroke(C, 4.5))
+      draw.path(VP, 'M35,64 L24,71 L34,78', nil, stroke(C, 4.5))
+   end,
+
+   -- Shift legends
+
+   store = function(VP:obj!, C:str!)
+      draw.line(VP, 14, 50, 82, 50, C, 8)
+      arrowHead(VP, 84, 50, -1, C, 8)
+   end,
+
+   mixed_fraction = function(VP:obj!, C:str!)
+      italic(VP, 20, 66, 'x', 56, C)
+      italic(VP, 63, 40, 'y', 44, C)
+      draw.line(VP, 44, 50, 82, 50, C, 6, 'butt')
+      italic(VP, 63, 86, 'z', 44, C)
+   end,
+
+   nth_root = function(VP:obj!, C:str!)
+      italic(VP, 16, 42, 'y', 40, C)
+      draw.path(VP, 'M8,58 L18,54 L30,86 L44,22 L94,22', nil, stroke(C, 7))
+      italic(VP, 70, 80, 'x', 64, C)
+   end,
+
+   log_base = function(VP:obj!, C:str!)
+      sans(VP, 0, 62, 'log', 38, C, 'start')
+      italic(VP, 65, 76, 'y', 30, C)
+      italic(VP, 88, 62, 'x', 42, C)
+   end,
+
+   clip = function(VP:obj!, C:str!)
+      draw.rect(VP, 10, 10, 64, 64, nil, { stroke=C, width=7, dash='12,9' })
+      draw.path(VP, 'M46,42 L90,62 L70,68 L84,88 L76,94 L62,74 L50,88 Z', C)
+   end,
+
+   paste = function(VP:obj!, C:str!)
+      draw.rect(VP, 14, 8, 52, 66, C, { round=6 })
+      draw.rect(VP, 36, 30, 52, 66, C, { round=6, stroke='#1f1f1f', width=5 })
+   end,
+
+   capture = function(VP:obj!, C:str!)
+      for _, corner in array<str> { 'M8,32 L8,8 L32,8', 'M68,8 L92,8 L92,32', 'M92,68 L92,92 L68,92',
+            'M32,92 L8,92 L8,68' } do
+         draw.path(VP, corner, nil, stroke(C, 8))
+      end
+      draw.rect(VP, 24, 32, 52, 40, nil, { stroke=C, width=7, round=6 })
+      draw.circle(VP, 50, 52, 10, nil, { stroke=C, width=6 })
+   end,
+
+   angle = function(VP:obj!, C:str!)
+      draw.path(VP, 'M84,22 L14,80 L88,80', nil, stroke(C, 10))
+   end,
+
+   approx = function(VP:obj!, C:str!)
+      for _, y in array<double> { 36, 64 } do
+         draw.path(VP, f'M12,{y + 6} C26,{y - 12} 40,{y - 8} 50,{y} C60,{y + 8} 74,{y + 12} 88,{y - 6}', nil,
+            stroke(C, 9))
+      end
+   end,
+
+   format_menu = function(VP:obj!, C:str!)
+      draw.path(VP, 'M18,46 A32,32 0 0 1 78,34', nil, stroke(C, 8))
+      draw.path(VP, 'M64,22 L80,36 L62,44', nil, stroke(C, 8))
+      draw.path(VP, 'M82,54 A32,32 0 0 1 22,66', nil, stroke(C, 8))
+      draw.path(VP, 'M36,78 L20,64 L38,56', nil, stroke(C, 8))
+   end
+}
+
+icons.names = function():array<str>
+   local result = array<str>
+   for name in pairs(painters) do result.push(name) end
+   result.sort()
+   return result
+end
+
+icons.exists = function(Name:str!):bool
+   return painters[Name] != nil
+end
+
+-- Draw icon Name centred on CX, CY in Parent, Size units square.  Returns the icon viewport.
+
+icons.draw = function(Parent:obj!, Name:str!, CX:num!, CY:num!, Size:num!, Colour:str!, Accent:str):obj
+   local painter = painters[Name]
+   painter ?! raise f'Unknown icon "{Name}"'
+   local vp = draw.iconBox(Parent, CX, CY, Size)
+   painter(vp, Colour, Accent)
+   return vp
+end
